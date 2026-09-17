@@ -1117,7 +1117,8 @@ lmap <- lmap |>
       window.addEventListener('hotspot_year_change', function(e) {
         var yr = String(e.detail.year);
         hotspotYears.forEach(function(y) {
-          var layer = map.layerManager.getLayer('image', 'hotspot_' + y);
+          var layerManager = map.layerManager;
+          var layer = layerManager && layerManager.getLayer('image', 'hotspot_' + y);
           if (layer) layer.setOpacity(String(y) === yr ? 1 : 0);
         });
       });
@@ -1146,7 +1147,8 @@ ojs_define(
   rast_ymax  = rast_ext[4],
   rast_xres  = rast_res[1],
   rast_yres  = rast_res[2],
-  rast_ncols = terra::ncol(tpl)
+  rast_ncols = terra::ncol(tpl),
+  rast_nrows = terra::nrow(tpl)
 )
 ```
 
@@ -1181,20 +1183,28 @@ jsonlite::write_json(sp_attrs_list,
 # --- per-year compact files (Hotspot Explorer: recent years only) ---
 for (yr in RECENT_CUTOFF:RECENT_YEAR) {
   yr_path <- file.path(cell_species_dir, paste0("species_", yr, ".json"))
-  if (!file.exists(yr_path)) {
-    yr_data <- exposure_df[year_index[[as.character(yr)]], ] |>
-      dplyr::filter(!is.na(cell)) |>
-      dplyr::mutate(
-        vl = vapply(as.character(var), var_label, character(1)),
-        v  = var_idx[vl],
-        p  = round(as.numeric(propExposed), 4),
-        r  = redlist_idx[as.character(redlistCategory)]
-      ) |>
-      dplyr::arrange(cell, v) |>
-      dplyr::select(c = cell, s = spName, v, p, r)
-    jsonlite::write_json(yr_data, yr_path, auto_unbox = TRUE)
-  }
+  yr_data <- exposure_df[year_index[[as.character(yr)]], ] |>
+    dplyr::filter(!is.na(cell), cell >= 1, cell <= terra::ncell(tpl)) |>
+    dplyr::mutate(
+      vl = vapply(as.character(var), var_label, character(1)),
+      v  = var_idx[vl],
+      p  = round(as.numeric(propExposed), 4),
+      r  = redlist_idx[as.character(redlistCategory)]
+    ) |>
+    dplyr::arrange(cell, v) |>
+    dplyr::select(c = cell, s = spName, v, p, r)
+  jsonlite::write_json(yr_data, yr_path, auto_unbox = TRUE)
 }
+
+# Quarto copies static assets before executing this chunk. Sync the refreshed
+# lookup files into the rendered site so OJS fetches the current data.
+site_cell_species_dir <- file.path("_site", cell_species_dir)
+dir.create(site_cell_species_dir, recursive = TRUE, showWarnings = FALSE)
+file.copy(
+  list.files(cell_species_dir, full.names = TRUE),
+  site_cell_species_dir,
+  overwrite = TRUE
+)
 ```
 
 ```{ojs}
@@ -1205,7 +1215,7 @@ clicked_cell = Generators.observe(notify => {
   function handler(e) {
     const { lat, lng } = e.detail;
     if (lng < rast_xmin || lng > (rast_xmin + rast_ncols * rast_xres) ||
-        lat > rast_ymax || lat < (rast_ymax - rast_ncols * rast_yres)) {
+        lat > rast_ymax || lat <= (rast_ymax - rast_nrows * rast_yres)) {
       return; // outside raster extent — ignore
     }
     const col  = Math.floor((lng - rast_xmin) / rast_xres) + 1;
@@ -1364,10 +1374,30 @@ cell_species = {
 //| output: false
 cell_filtered = clicked_cell === ""
   ? []
-  : cell_species
+  : Array.from(cell_species
       .filter(d => d.cell === Number(clicked_cell))
       .filter(d => hotspot_vars.includes(d.var))
       .filter(d => !hotspot_threatened_only || ["CR", "EN", "VU"].includes(d.redlistCategory))
+      .reduce((bySpecies, row) => {
+        const existing = bySpecies.get(row.spName);
+        if (existing) {
+          existing.variables.push(row.var);
+          existing.maxPropExposed = Math.max(existing.maxPropExposed, row.propExposed ?? 0);
+        } else {
+          bySpecies.set(row.spName, {
+            ...row,
+            variables: [row.var],
+            maxPropExposed: row.propExposed ?? 0
+          });
+        }
+        return bySpecies;
+      }, new Map())
+      .values())
+      .map(row => ({
+        ...row,
+        variables: hotspot_vars.filter(variable => row.variables.includes(variable)),
+        propExposed: row.maxPropExposed
+      }))
 ```
 
 ```{ojs}
@@ -1375,17 +1405,19 @@ cell_filtered = clicked_cell === ""
 clicked_cell === ""
   ? html`<p style="color:#888;font-style:italic">Click any location on the map to see which species are exposed there.</p>`
   : html`<div>
-    <h6 style="margin:0 0 6px">Species exposed at this location in ${hotspot_year} (${click_latlon})</h6>
-    ${Inputs.table(
-      cell_filtered.map(({ spName, var: v, propExposed, orderName, familyName, redlistCategory }) => ({
-        Species:           spName,
-        Variable:          v,
-        "% range exposed": propExposed ? (propExposed * 100).toFixed(2) + "%" : "—",
-        Order:             orderName   ?? "—",
-        Family:            familyName  ?? "—",
-        "IUCN status":     redlistCategory ?? "—"
-      })),
-      { width: "100%", sort: "% range exposed", reverse: true }
-    )}
+    <h6 style="margin:0 0 6px">Species exposed in the selected grid cell in ${hotspot_year} (centre: ${click_latlon})</h6>
+    ${cell_filtered.length === 0
+      ? html`<p style="color:#888;font-style:italic">No species match the selected filters.</p>`
+      : Inputs.table(
+          cell_filtered.map(({ spName, variables, propExposed, orderName, familyName, redlistCategory }) => ({
+            Species:           spName,
+            "Exposed variables": variables.join("; "),
+            "Max. range exposed": propExposed ? (propExposed * 100).toFixed(2) + "%" : "—",
+            Order:             orderName   ?? "—",
+            Family:            familyName  ?? "—",
+            "IUCN status":     redlistCategory ?? "—"
+          })),
+          { width: "100%", sort: "Max. range exposed", reverse: true }
+        )}
     </div>`
 ```
