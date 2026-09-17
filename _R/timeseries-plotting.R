@@ -566,16 +566,15 @@ build_polar_figure <- function(polar_data, sp_name, year_range) {
     ggplot2::scale_fill_identity(na.value = NA) +
     ggplot2::scale_colour_identity() +
     ggplot2::scale_x_continuous(limits = c(0.5, n_s + 0.5), breaks = NULL) +
-    ggplot2::scale_y_continuous(limits = c(0, label_r * 1.22), expand = c(0, 0)) +
+    ggplot2::scale_y_continuous(limits = c(0, label_r * 1.14), expand = c(0, 0)) +
     ggplot2::labs(
-      title    = sprintf("%s \u2014 %% of range exposed by variable in %d",
-                         gsub("_", " ", sp_name), year_range[2]),
-      subtitle = "Linear radius 0\u2013100%; green zone = < 25%"
+      title = sprintf("%s \u2014 %% of range exposed by variable in %d",
+                      gsub("_", " ", sp_name), year_range[2])
     ) +
     ggplot2::theme_void(base_size = 10) +
     ggplot2::theme(
-      plot.title    = ggplot2::element_text(hjust = 0.5, size = 9, colour = "grey30"),
-      plot.subtitle = ggplot2::element_text(hjust = 0.5, size = 7.5, colour = "grey50"),
-      plot.margin   = ggplot2::margin(1, 1, 1, 1)
+      plot.title  = ggplot2::element_text(hjust = 0.5, size = 9, colour = "grey30",
+                                          margin = ggplot2::margin(0, 0, 0, 0)),
+      plot.margin = ggplot2::margin(0, 0, 0, 0)
     )
 }

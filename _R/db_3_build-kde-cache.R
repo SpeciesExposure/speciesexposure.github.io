@@ -45,7 +45,7 @@ data_dir  <- Sys.getenv("DATA_DIR",  "data")
 cache_dir <- Sys.getenv("CACHE_DIR", "data")
 dir.create(cache_dir, showWarnings = FALSE, recursive = TRUE)
 
-raster_path  <- file.path(data_dir, "temp__12.tif")
+raster_path  <- file.path(data_dir, "rast", "temp__12.tif")
 allcell_path <- file.path(data_dir, "AllCellExposureSpXVar.rds")
 ts_cache_path <- file.path(data_dir, "species-timeseries-cache.rds")
 

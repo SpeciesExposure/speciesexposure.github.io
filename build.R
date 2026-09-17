@@ -41,6 +41,14 @@ message("\n=== Step 2: Build KDE cache ===")
 source("_R/db_3_build-kde-cache.R")
 
 # ---------------------------------------------------------------------------
+# Step 2.5: Build per-species, per-raster panel figures
+# Writes data/species_figs/{species}__{family}__{agg}.png (6 panels per
+# species). The dashboard's checkbox grid loads these directly.
+# ---------------------------------------------------------------------------
+message("\n=== Step 2.5: Build panel figures ===")
+source("_R/db_4_build-panel-figures.R")
+
+# ---------------------------------------------------------------------------
 # Step 3: Render (figure outputs land in data/ which _quarto.yml lists as
 #          resources, so Quarto copies them to _site/data/ automatically)
 # ---------------------------------------------------------------------------
