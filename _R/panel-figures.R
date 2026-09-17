@@ -443,7 +443,8 @@ build_single_panel_figure <- function(cfg_row, range_cells, species_name,
 
   p_dens <- ggplot(dens_df, aes(x = value, y = density,
                                 colour = period, fill = period)) +
-    geom_area(alpha = 0.32, position = "identity", linewidth = 0.55)
+    geom_area(alpha = 0.16, position = "identity", colour = NA) +
+    geom_line(linewidth = 0.8)
 
   if (!is.null(thresh_df)) {
     p_dens <- p_dens +
@@ -468,7 +469,7 @@ build_single_panel_figure <- function(cfg_row, range_cells, species_name,
 
   # --- 7. Combine ----------------------------------------------------------
   p_kde + p_dens +
-    patchwork::plot_layout(widths = c(4, 1), guides = "collect") +
+    patchwork::plot_layout(widths = c(3, 2), guides = "collect") +
     patchwork::plot_annotation(
       title    = sprintf("%s \u2014 %s: %s",
                          gsub("_", " ", species_name),
