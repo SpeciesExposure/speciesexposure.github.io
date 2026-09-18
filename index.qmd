@@ -4,12 +4,35 @@ format:
   dashboard:
     nav-buttons:
       - icon: github
-        href: https://github.com/cmerow/2025_Exposure
+        href: https://speciesexposure.github.io/
         aria-label: GitHub
 ---
 
 ```{=html}
 <style>
+#atlas-loading-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  background: #fff;
+  color: #2c3e50;
+  transition: opacity 220ms ease, visibility 220ms ease;
+}
+#atlas-loading-overlay.is-hidden {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+#atlas-loading-overlay p {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+  text-align: center;
+}
 /* Prevent card focus state from resizing the map card */
 .card:focus-within,
 .bslib-card:focus-within {
@@ -215,6 +238,16 @@ format:
   }
 }
 </style>
+
+<div id="atlas-loading-overlay" role="status" aria-live="polite">
+  <p>Species exposure atlas loading, please be patient.</p>
+</div>
+
+<script>
+window.addEventListener("load", () => {
+  document.getElementById("atlas-loading-overlay")?.classList.add("is-hidden");
+}, { once: true });
+</script>
 ```
 
 ```{r setup, include=FALSE}
@@ -233,7 +266,6 @@ library(jsonlite)
 library(leaflet.extras)
 library(DT)
 library(terra)
-library(raster)   # addRasterImage expects a {raster} object
 
 # Source plotting helpers
 source("_R/timeseries-plotting.R")
@@ -1058,6 +1090,8 @@ pal_fn <- function(x) global_pal(log10(pmax(x, 1)))
 # Legend palette and values on log10 scale for readability
 legend_breaks <- c(1, 2, 5, 10, 20, 50, 100, max(global_vals))
 legend_breaks <- legend_breaks[legend_breaks <= max(global_vals)]
+raster_ext    <- as.vector(terra::ext(tpl))
+raster_res    <- terra::res(tpl)
 
 # Start map
 lmap <- leaflet::leaflet(height = "525px", options = leaflet::leafletOptions(preferCanvas = TRUE)) |>
@@ -1073,19 +1107,38 @@ lmap <- leaflet::leaflet(height = "525px", options = leaflet::leafletOptions(pre
     minimized     = FALSE
   )
 
-# Add one raster overlay per hotspot year (2023–present); only default_year starts visible
+# Add one vector-rectangle overlay per hotspot year, each in its own Leaflet
+# pane rendered on canvas. Vector cells use the exact source lon/lat grid (no
+# reprojection), so the fill always matches the click-selection math below.
+# A canvas renderer (vs. the SVG default) avoids two problems: sub-pixel
+# rectangles disappearing at low zoom, and hairline seams between cells.
+# Cells are also expanded by a small epsilon so adjacent fills overlap
+# slightly, as extra insurance against seams.
+seam_eps <- min(raster_res) * 0.001
 for (yr in hotspot_years) {
+  pane_name <- paste0("hotspot_", yr)
+  lmap <- lmap |> leaflet::addMapPane(pane_name, zIndex = 410)
   yr_counts <- all_hotspot_counts |> dplyr::filter(year == yr)
-  rv <- rep(NA_real_, terra::ncell(tpl))
-  rv[yr_counts$cell] <- yr_counts$n_species
-  yr_raster <- raster::raster(terra::setValues(tpl, rv))
-  lmap <- lmap |> leaflet::addRasterImage(
-    yr_raster,
-    colors  = pal_fn,
-    opacity = if (yr == default_year) 1 else 0,
-    layerId = paste0("hotspot_", yr)
+  cell_xy <- terra::xyFromCell(tpl, yr_counts$cell)
+  lmap <- lmap |> leaflet::addRectangles(
+    lng1 = cell_xy[, 1] - raster_res[1] / 2 - seam_eps,
+    lat1 = cell_xy[, 2] - raster_res[2] / 2 - seam_eps,
+    lng2 = cell_xy[, 1] + raster_res[1] / 2 + seam_eps,
+    lat2 = cell_xy[, 2] + raster_res[2] / 2 + seam_eps,
+    stroke = FALSE,
+    fillColor = pal_fn(yr_counts$n_species),
+    fillOpacity = 1,
+    options = leaflet::pathOptions(
+      interactive = FALSE,
+      smoothFactor = 0, # disable point simplification so tiny cells don't vanish at low zoom
+      noClip = TRUE,
+      renderer = leaflet::JS(sprintf("L.canvas({pane: '%s', padding: 0.5})", pane_name))
+    )
   )
 }
+
+# Dedicated pane (above the hotspot data panes) for the click-selection outline.
+lmap <- lmap |> leaflet::addMapPane("cellSelectPane", zIndex = 620)
 
 # Add legend and click handler
 default_year_df <- exposure_df[year_index[[as.character(default_year)]], ]
@@ -1111,25 +1164,42 @@ lmap <- lmap |>
         if (mm) { mm.classList.remove('html-fill-item', 'html-fill-container'); }
       }, 100);
       // Listen for year changes from OJS and toggle raster layer opacity.
-      // addRasterImage registers layers via layerManager (not layer.options),
-      // so we must use map.layerManager.getLayer(id, category) to access them.
       var hotspotYears = [", paste(hotspot_years, collapse = ","), "];
-      window.addEventListener('hotspot_year_change', function(e) {
-        var yr = String(e.detail.year);
+      var rasterXmin = ", raster_ext[1], ";
+      var rasterYmax = ", raster_ext[4], ";
+      var rasterXres = ", raster_res[1], ";
+      var rasterYres = ", raster_res[2], ";
+      var rasterNcols = ", terra::ncol(tpl), ";
+      var rasterNrows = ", terra::nrow(tpl), ";
+      var setHotspotYear = function(year) {
         hotspotYears.forEach(function(y) {
-          var layerManager = map.layerManager;
-          var layer = layerManager && layerManager.getLayer('image', 'hotspot_' + y);
-          if (layer) layer.setOpacity(String(y) === yr ? 1 : 0);
+          var pane = map.getPane('hotspot_' + y);
+          if (pane) pane.style.display = String(y) === String(year) ? '' : 'none';
         });
+      };
+      setHotspotYear(", default_year, ");
+      window.addEventListener('hotspot_year_change', function(e) {
+        setHotspotYear(e.detail.year);
       });
       map.on('click', function(e) {
-        // Update or add a red circle marker at the clicked location
-        if (window._clickMarker) { window._clickMarker.remove(); }
-        window._clickMarker = L.circleMarker([e.latlng.lat, e.latlng.lng], {
-          radius: 8, color: '#ff2222', weight: 2,
-          fillColor: '#ff2222', fillOpacity: 0.5
-        }).addTo(map);
-        window._mapClick = { lat: e.latlng.lat, lng: e.latlng.lng, t: Date.now() };
+        // Snap directly to the source longitude/latitude grid.
+        var col = Math.floor((e.latlng.lng - rasterXmin) / rasterXres);
+        var row = Math.floor((rasterYmax - e.latlng.lat) / rasterYres);
+        if (col < 0 || col >= rasterNcols || row < 0 || row >= rasterNrows) return;
+        var west = rasterXmin + col * rasterXres;
+        var north = rasterYmax - row * rasterYres;
+        if (window._clickCell) { window._clickCell.remove(); }
+        window._clickCell = L.rectangle(
+          [[north - rasterYres, west], [north, west + rasterXres]],
+          { color: '#ff2222', weight: 2, fill: false, interactive: false, pane: 'cellSelectPane' }
+        ).addTo(map);
+
+        window._mapClick = {
+          lat: north - rasterYres / 2,
+          lng: west + rasterXres / 2,
+          cell: row * rasterNcols + col + 1,
+          t: Date.now()
+        };
         window.dispatchEvent(new CustomEvent('leaflet_mapclick', { detail: window._mapClick }));
       });
     }
@@ -1214,6 +1284,10 @@ file.copy(
 clicked_cell = Generators.observe(notify => {
   function handler(e) {
     const { lat, lng } = e.detail;
+    if (e.detail.cell) {
+      notify(String(e.detail.cell));
+      return;
+    }
     if (lng < rast_xmin || lng > (rast_xmin + rast_ncols * rast_xres) ||
         lat > rast_ymax || lat <= (rast_ymax - rast_nrows * rast_yres)) {
       return; // outside raster extent — ignore

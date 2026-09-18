@@ -1,0 +1,16 @@
+{
+  "name": "Species Exposure Dashboard",
+  "build": {
+    "dockerfile": "../Dockerfile",
+    "context": ".."
+  },
+  "remoteUser": "rstudio",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "REditorSupport.r",
+        "quarto.quarto"
+      ]
+    }
+  }
+}
