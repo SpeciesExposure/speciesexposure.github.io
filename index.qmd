@@ -397,6 +397,10 @@ from 1940 to the present.
     map to see all species present there and how many are currently
     exposed to extreme conditions.
   </li>
+  <li>
+    <strong>Shiny app</strong> — for more flexible filtering and custom data exploration, download and run the full interactive Shiny app from
+    <a href="https://github.com/SpeciesExposure/exposureApp" target="_blank">github.com/SpeciesExposure/exposureApp</a>. <img src="img/shinyApp.png" alt="Screenshot of the Shiny app showing a species timeseries and map" style="max-width:50%; border:1px solid #ddd; border-radius:4px; margin:1rem 0;">
+  </li>
 </ul>
 
 <hr style="margin: 1.2rem 0;">
@@ -425,26 +429,11 @@ precipitation at annual and seasonal timescales:</p>
 
 <hr style="margin: 1.2rem 0;">
 
-<h4>Run locally with custom filtering</h4>
-<p>
-  For more flexible filtering and custom data exploration, you can download and
-  run the full interactive Shiny app from
-  <a href="https://github.com/SpeciesExposure/exposureApp" target="_blank">github.com/SpeciesExposure/exposureApp</a>.
-  Install directly from the repository in R:
-</p>
-<img src="img/shinyApp.png" alt="Screenshot of the Shiny app showing a species timeseries and map" style="max-width:50%; border:1px solid #ddd; border-radius:4px; margin:1rem 0;">
-<pre style="background:#f4f4f4; border-left:4px solid #2c7bb6; border-radius:4px;
-            padding:0.8rem 1rem; font-size:0.85rem; overflow-x:auto;"><code>install.packages(
-  "https://github.com/SpeciesExposure/exposureApp/archive/refs/heads/main.tar.gz",
-  repos = NULL,
-  type = "source"
-)
 
-exposureApp::exposureApp()</code></pre>
 
 <p style="margin-top:1.5rem; font-size:0.85rem; color:#777;">
   Source code:
-  <a href="https://github.com/cmerow/2025_Exposure" target="_blank">github.com/cmerow/2025_Exposure</a>
+  <a href="https://github.com/SpeciesExposure" target="_blank">https://github.com/SpeciesExposure</a>
 </p>
 
 </div>
@@ -1174,7 +1163,7 @@ lmap <- lmap |>
       var setHotspotYear = function(year) {
         hotspotYears.forEach(function(y) {
           var pane = map.getPane('hotspot_' + y);
-          if (pane) pane.style.display = String(y) === String(year) ? '' : 'none';
+          if (pane) pane.style.display = String(y) === String(year) ? 'block' : 'none';
         });
       };
       setHotspotYear(", default_year, ");
@@ -1189,9 +1178,14 @@ lmap <- lmap |>
         var west = rasterXmin + col * rasterXres;
         var north = rasterYmax - row * rasterYres;
         if (window._clickCell) { window._clickCell.remove(); }
-        window._clickCell = L.rectangle(
-          [[north - rasterYres, west], [north, west + rasterXres]],
-          { color: '#ff2222', weight: 2, fill: false, interactive: false, pane: 'cellSelectPane' }
+        if (window._clickCellHalo) { window._clickCellHalo.remove(); }
+        var cellBounds = [[north - rasterYres, west], [north, west + rasterXres]];
+        // White halo drawn first so the purple line stays visible over any fill colour.
+        window._clickCellHalo = L.rectangle(cellBounds,
+          { color: '#ffffff', weight: 4, fill: false, interactive: false, pane: 'cellSelectPane' }
+        ).addTo(map);
+        window._clickCell = L.rectangle(cellBounds,
+          { color: '#a020f0', weight: 2, fill: false, interactive: false, pane: 'cellSelectPane' }
         ).addTo(map);
 
         window._mapClick = {
@@ -1204,7 +1198,13 @@ lmap <- lmap |>
       });
     }
   "))
-lmap
+# Hide non-default year panes via CSS (not just JS) so the very first paint,
+# before onRender fires, never briefly shows every year at once.
+hotspot_pane_css <- paste0(
+  sprintf(".leaflet-hotspot_%s-pane { display: none; }", setdiff(hotspot_years, default_year)),
+  collapse = "\n"
+)
+htmltools::tagList(htmltools::tags$style(htmltools::HTML(hotspot_pane_css)), lmap)
 ```
 
 ```{r raster-geometry, include=FALSE}
