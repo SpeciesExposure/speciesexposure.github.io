@@ -8,5 +8,9 @@ if [ ! -d "$source_dir" ]; then
   exit 0
 fi
 
+if [ -L "$target_dir" ]; then
+  rm "$target_dir"
+fi
+
 mkdir -p "$target_dir"
 cp -alu "$source_dir/." "$target_dir/"

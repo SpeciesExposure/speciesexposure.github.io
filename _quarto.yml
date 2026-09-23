@@ -1,9 +1,14 @@
 project:
   type: website
   output-dir: _site
+  preview:
+    host: 0.0.0.0
+    watch-inputs: false
   resources:
     - data/cell_species/
     - data/species_maps/
+  post-render:
+    - sh link-species-figures.sh
 
 # Dashboard appearance and layout
 format:

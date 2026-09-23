@@ -631,7 +631,7 @@ viewof selected_species = {
   yield wrapper;
 
   const ts = new TomSelect(sel, {
-    maxOptions: 150,
+    maxOptions: null,
     placeholder: 'Type to search…',
     dropdownParent: 'body',
     onChange: () => wrapper.dispatchEvent(new Event('input', { bubbles: true }))
