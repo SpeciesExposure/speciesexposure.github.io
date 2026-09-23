@@ -3,7 +3,6 @@ project:
   output-dir: _site
   resources:
     - data/cell_species/
-    - data/species_figs/
     - data/species_maps/
 
 # Dashboard appearance and layout

@@ -9,6 +9,7 @@
 #
 # Optional: limit to first N species for fast dev iteration:
 #   DEV_N_SPECIES=10 Rscript build.R
+# Leave DEV_N_SPECIES unset for a full species run.
 # =============================================================================
 
 # Ensure working directory is apps/dashboard/
@@ -22,7 +23,8 @@ if (!file.exists("_quarto.yml")) {
 # ---------------------------------------------------------------------------
 Sys.setenv(DATA_DIR  = Sys.getenv("DATA_DIR",  "data"))
 Sys.setenv(CACHE_DIR = Sys.getenv("CACHE_DIR", "data"))
-Sys.setenv(DEV_N_SPECIES = Sys.getenv("DEV_N_SPECIES", 100))
+# Sys.setenv(DEV_N_SPECIES = Sys.getenv("DEV_N_SPECIES", "100")) #limit to a smaller number for testing
+Sys.setenv(DEV_N_SPECIES = Sys.getenv("DEV_N_SPECIES", ""))
 
 message(sprintf("DATA_DIR  = %s", Sys.getenv("DATA_DIR")))
 message(sprintf("CACHE_DIR = %s", Sys.getenv("CACHE_DIR")))
@@ -49,8 +51,7 @@ message("\n=== Step 2.5: Build panel figures ===")
 source("_R/db_4_build-panel-figures.R")
 
 # ---------------------------------------------------------------------------
-# Step 3: Render (figure outputs land in data/ which _quarto.yml lists as
-#          resources, so Quarto copies them to _site/data/ automatically)
+# Step 3: Render (small resources listed in _quarto.yml are copied to _site/data/)
 # ---------------------------------------------------------------------------
 message("\n=== Step 3: Render dashboard ===")
 
@@ -68,6 +69,12 @@ if (length(old_jsons)) {
 
 exit_code <- system("quarto render .")
 if (exit_code != 0) stop("quarto render failed (exit code ", exit_code, ")")
+
+# Keep the large figure directory out of Quarto's resource discovery. Sync it
+# only for production builds so `quarto preview` remains fast.
+message("\n=== Step 3.5: Sync species figures ===")
+exit_code <- system("sh copy-species-figures.sh")
+if (exit_code != 0) stop("Copying species figures failed (exit code ", exit_code, ")")
 
 # ---------------------------------------------------------------------------
 # Step 4: Publish to gh-pages
