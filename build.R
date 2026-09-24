@@ -6,6 +6,7 @@
 #
 # Usage (from apps/dashboard/):
 #   Rscript build.R
+#   Rscript build.R --publish-existing  # sync existing figures and publish only
 #
 # Optional: limit to first N species for fast dev iteration:
 #   DEV_N_SPECIES=10 Rscript build.R
@@ -15,6 +16,13 @@
 # Ensure working directory is apps/dashboard/
 if (!file.exists("_quarto.yml")) {
   stop("Run this script from apps/dashboard/ (where _quarto.yml lives).")
+}
+
+args <- commandArgs(trailingOnly = TRUE)
+publish_existing <- "--publish-existing" %in% args
+unknown_args <- setdiff(args, "--publish-existing")
+if (length(unknown_args)) {
+  stop("Unknown argument(s): ", paste(unknown_args, collapse = ", "))
 }
 
 # ---------------------------------------------------------------------------
@@ -30,45 +38,45 @@ message(sprintf("DATA_DIR  = %s", Sys.getenv("DATA_DIR")))
 message(sprintf("CACHE_DIR = %s", Sys.getenv("CACHE_DIR")))
 message(sprintf("DEV_N_SPECIES = %s", Sys.getenv("DEV_N_SPECIES")))
 
-# ---------------------------------------------------------------------------
-# Step 1: Prepare data caches (reads from DATA_DIR, writes to CACHE_DIR)
-# ---------------------------------------------------------------------------
-message("\n=== Step 1: Prepare data ===")
-source("_R/db_01_prepare-data.R")
+if (publish_existing) {
+  if (!file.exists(file.path("_site", "index.html"))) {
+    stop("_site/index.html not found; run a normal build before --publish-existing")
+  }
+  message("\n=== Reusing existing data, figures, and rendered site ===")
+} else {
+  # -------------------------------------------------------------------------
+  # Step 1: Prepare data caches (reads from DATA_DIR, writes to CACHE_DIR)
+  # -------------------------------------------------------------------------
+  message("\n=== Step 1: Prepare data ===")
+  source("_R/db_01_prepare-data.R")
 
-# ---------------------------------------------------------------------------
-# Step 2: Build KDE figure cache
-# ---------------------------------------------------------------------------
-message("\n=== Step 2: Build KDE cache ===")
-source("_R/db_3_build-kde-cache.R")
+  # -------------------------------------------------------------------------
+  # Step 2: Build KDE figure cache
+  # -------------------------------------------------------------------------
+  message("\n=== Step 2: Build KDE cache ===")
+  source("_R/db_3_build-kde-cache.R")
 
-# ---------------------------------------------------------------------------
-# Step 2.5: Build per-species, per-raster panel figures
-# Writes data/species_figs/{species}__{family}__{agg}.png (6 panels per
-# species). The dashboard's checkbox grid loads these directly.
-# ---------------------------------------------------------------------------
-message("\n=== Step 2.5: Build panel figures ===")
-source("_R/db_4_build-panel-figures.R")
+  # -------------------------------------------------------------------------
+  # Step 2.5: Build per-species, per-raster panel figures
+  # -------------------------------------------------------------------------
+  message("\n=== Step 2.5: Build panel figures ===")
+  source("_R/db_4_build-panel-figures.R")
 
-# ---------------------------------------------------------------------------
-# Step 3: Render (small resources listed in _quarto.yml are copied to _site/data/)
-# ---------------------------------------------------------------------------
-message("\n=== Step 3: Render dashboard ===")
+  # -------------------------------------------------------------------------
+  # Step 3: Render dashboard
+  # -------------------------------------------------------------------------
+  message("\n=== Step 3: Render dashboard ===")
 
-# Delete old-format cell_species JSON files so the render step regenerates them
-# in the new compact format. Lookup files (var_codes, etc.) are always overwritten.
-cs_dir    <- file.path("data", "cell_species")
-old_jsons <- list.files(cs_dir, pattern = "^species_\\d{4}\\.json$", full.names = TRUE)
-if (length(old_jsons)) {
-  message(sprintf("Removing %d old cell_species JSON(s) for regeneration ...", length(old_jsons)))
-  file.remove(old_jsons)
+  cs_dir    <- file.path("data", "cell_species")
+  old_jsons <- list.files(cs_dir, pattern = "^species_\\d{4}\\.json$", full.names = TRUE)
+  if (length(old_jsons)) {
+    message(sprintf("Removing %d old cell_species JSON(s) for regeneration ...", length(old_jsons)))
+    file.remove(old_jsons)
+  }
+
+  exit_code <- system("quarto render .")
+  if (exit_code != 0) stop("quarto render failed (exit code ", exit_code, ")")
 }
-
-# Clear quarto freeze cache so all R chunks re-execute with fresh data
-#unlink(".quarto/_freeze", recursive = TRUE)
-
-exit_code <- system("quarto render .")
-if (exit_code != 0) stop("quarto render failed (exit code ", exit_code, ")")
 
 # Keep the large figure directory out of Quarto's resource discovery. Sync it
 # only for production builds so `quarto preview` remains fast.
@@ -85,8 +93,7 @@ if (exit_code != 0) stop("Copying species figures failed (exit code ", exit_code
 message("\n=== Step 4: Publish to gh-pages ===")
 
 # Get the remote URL from the main repo
-remote_url <- trimws(system(
-  "git -C ../.. remote get-url origin", intern = TRUE))
+remote_url <- trimws(system("git remote get-url origin", intern = TRUE))
 message("Remote: ", remote_url)
 
 # Build a fresh single-commit repo inside _site/ and force-push
@@ -100,7 +107,6 @@ publish_cmds <- c(
 )
 exit_code <- system(paste(publish_cmds, collapse = " && "))
 if (exit_code != 0) stop("gh-pages push failed (exit code ", exit_code, ")")
-if (exit_code != 0) stop("quarto publish failed (exit code ", exit_code, ")")
 
 message("\n=== Done. Dashboard published to gh-pages. ===")
 message("URL: https://cmerow.github.io/2025_Exposure/")

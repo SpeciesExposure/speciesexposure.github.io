@@ -593,51 +593,129 @@ viewof selected_species = {
   const TomSelectModule = await require("https://cdn.jsdelivr.net/npm/tom-select@2.4.3/dist/js/tom-select.complete.min.js");
   const TomSelect = TomSelectModule.default ?? TomSelectModule;
 
-  // Map species → order using metadata; fall back to "Unknown"
   const metaRows = transpose(species_meta_data);
-  const orderMap = new Map(metaRows.map(r => [r.Species, r.Order ?? "Unknown"]));
+  const metadataBySpecies = new Map(metaRows.map(row => [row.Species, row]));
+  const normalizeTaxon = value => value == null || String(value).trim() === ""
+    ? "Unknown"
+    : String(value);
+  const catalogue = species_list.map(species => {
+    const metadata = metadataBySpecies.get(species) ?? {};
+    return {
+      value: species,
+      text: species.replace(/_/g, " "),
+      order: normalizeTaxon(metadata.Order),
+      family: normalizeTaxon(metadata.Family)
+    };
+  });
+  const orders = [...new Set(catalogue.map(row => row.order))]
+    .sort((a, b) => a.localeCompare(b));
 
-  // Group species (from authoritative list) by order
-  const byOrder = new Map();
-  for (const sp of species_list) {
-    const order = orderMap.get(sp) ?? "Unknown";
-    if (!byOrder.has(order)) byOrder.set(order, []);
-    byOrder.get(order).push(sp);
-  }
-
-  // Build native <select> with <optgroup> per order
-  const sel = document.createElement('select');
-  for (const order of [...byOrder.keys()].sort()) {
-    const grp = document.createElement('optgroup');
-    grp.label = order;
-    for (const sp of byOrder.get(order).sort((a, b) => a.localeCompare(b))) {
-      const opt = document.createElement('option');
-      opt.value = sp;
-      opt.textContent = sp.replace(/_/g, ' ');
-      grp.appendChild(opt);
-    }
-    sel.appendChild(grp);
-  }
-  sel.value = species_list[0];
+  const makeLabel = (text, marginTop = "0") => {
+    const label = document.createElement("label");
+    label.textContent = text;
+    label.style.cssText = `display:block;font-size:0.75rem;font-weight:600;text-transform:uppercase;margin:${marginTop} 0 4px;color:#495057;`;
+    return label;
+  };
+  const addChoice = (select, value, text) => {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = text;
+    select.appendChild(option);
+  };
 
   // Wrapper that OJS viewof reads .value from and listens to for input events
-  const wrapper = document.createElement('div');
-  Object.defineProperty(wrapper, 'value', { get: () => sel.value });
-  const lbl = document.createElement('label');
-  lbl.textContent = 'Species';
-  lbl.style.cssText = 'display:block;font-size:0.75rem;font-weight:600;letter-spacing:0.05em;text-transform:uppercase;margin-bottom:4px;color:#495057;';
-  wrapper.appendChild(lbl);
-  wrapper.appendChild(sel);
+  const wrapper = document.createElement("div");
+  const orderSelect = document.createElement("select");
+  const familySelect = document.createElement("select");
+  const speciesSelect = document.createElement("select");
+
+  addChoice(orderSelect, "", "All orders");
+  orders.forEach(order => addChoice(orderSelect, order, order));
+  addChoice(familySelect, "", "All families");
+
+  wrapper.appendChild(makeLabel("Order"));
+  wrapper.appendChild(orderSelect);
+  wrapper.appendChild(makeLabel("Family", "8px"));
+  wrapper.appendChild(familySelect);
+  wrapper.appendChild(makeLabel("Species", "8px"));
+  wrapper.appendChild(speciesSelect);
+  Object.defineProperty(wrapper, "value", { get: () => speciesSelect.value });
   yield wrapper;
 
-  const ts = new TomSelect(sel, {
-    maxOptions: null,
-    placeholder: 'Type to search…',
-    dropdownParent: 'body',
-    onChange: () => wrapper.dispatchEvent(new Event('input', { bubbles: true }))
+  const speciesControl = new TomSelect(speciesSelect, {
+    valueField: "value",
+    labelField: "text",
+    searchField: ["text"],
+    optgroupField: "order",
+    optgroupValueField: "value",
+    optgroupLabelField: "label",
+    lockOptgroupOrder: true,
+    maxOptions: 100,
+    placeholder: "Type to search species...",
+    dropdownParent: "body",
+    render: {
+      no_results: () => '<div class="no-results">No matching species</div>'
+    },
+    onChange: () => wrapper.dispatchEvent(new Event("input", { bubbles: true }))
   });
 
-  invalidation.then(() => ts.destroy());
+  const rebuildFamilies = () => {
+    const selectedOrder = orderSelect.value;
+    const previousFamily = familySelect.value;
+    const families = new Map();
+    for (const row of catalogue) {
+      if (selectedOrder && row.order !== selectedOrder) continue;
+      const key = `${row.order}\u001f${row.family}`;
+      const label = selectedOrder ? row.family : `${row.family} — ${row.order}`;
+      families.set(key, label);
+    }
+
+    familySelect.replaceChildren();
+    addChoice(familySelect, "", "All families");
+    [...families.entries()]
+      .sort(([, a], [, b]) => a.localeCompare(b))
+      .forEach(([value, label]) => addChoice(familySelect, value, label));
+    familySelect.value = families.has(previousFamily) ? previousFamily : "";
+  };
+
+  const rebuildSpecies = () => {
+    const selectedOrder = orderSelect.value;
+    const selectedFamily = familySelect.value;
+    const previousSpecies = speciesControl.getValue();
+    const filtered = catalogue.filter(row => {
+      const familyKey = `${row.order}\u001f${row.family}`;
+      return (!selectedOrder || row.order === selectedOrder) &&
+        (!selectedFamily || familyKey === selectedFamily);
+    });
+
+    speciesControl.clear(true);
+    speciesControl.clearOptions();
+    speciesControl.clearOptionGroups();
+    [...new Set(filtered.map(row => row.order))]
+      .sort((a, b) => a.localeCompare(b))
+      .forEach(order => speciesControl.addOptionGroup(order, { value: order, label: order }));
+    speciesControl.addOptions(filtered);
+
+    const nextSpecies = filtered.some(row => row.value === previousSpecies)
+      ? previousSpecies
+      : filtered[0]?.value ?? "";
+    speciesControl.setValue(nextSpecies, true);
+    speciesControl.refreshOptions(false);
+    if (nextSpecies !== previousSpecies) {
+      wrapper.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+  };
+
+  orderSelect.addEventListener("change", () => {
+    rebuildFamilies();
+    rebuildSpecies();
+  });
+  familySelect.addEventListener("change", rebuildSpecies);
+
+  rebuildFamilies();
+  rebuildSpecies();
+
+  invalidation.then(() => speciesControl.destroy());
 }
 ```
 

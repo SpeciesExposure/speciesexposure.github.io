@@ -7,8 +7,6 @@ project:
   resources:
     - data/cell_species/
     - data/species_maps/
-  post-render:
-    - sh link-species-figures.sh
 
 # Dashboard appearance and layout
 format:

@@ -1,6 +1,9 @@
 #!/usr/bin/env sh
 set -eu
 
+# Run after rendering when local preview needs access to the full figure set.
+# Do not add this script as a Quarto hook: publish worktrees cannot use the link.
+
 source_dir="$(pwd)/data/species_figs"
 target_dir="_site/data/species_figs"
 
