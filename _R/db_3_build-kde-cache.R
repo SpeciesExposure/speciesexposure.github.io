@@ -35,6 +35,7 @@ suppressPackageStartupMessages({
 
 source("_R/timeseries-utils.R")
 source("_R/timeseries-plotting.R")
+source("_R/figure-paths.R")
 
 
 # =============================================================================
@@ -418,7 +419,9 @@ dir.create(species_figs_dir, showWarnings = FALSE, recursive = TRUE)
 n_rendered <- 0L
 n_failed   <- 0L
 for (sp_name in all_species) {
-  out_path <- file.path(species_figs_dir, paste0(sp_name, "_kde.png"))
+  out_path <- species_figure_path(
+    species_figs_dir, sp_name, paste0(sp_name, "_kde.png")
+  )
   if (!file.exists(out_path)) {
     tryCatch({
       fig <- build_kde_figure(
@@ -427,6 +430,7 @@ for (sp_name in all_species) {
         ts_data    = ts_cache[[sp_name]]
       )
       if (!is.null(fig)) {
+        dir.create(dirname(out_path), recursive = TRUE, showWarnings = FALSE)
         ggplot2::ggsave(out_path, plot = fig, width = 12, height = 8)
         n_rendered <- n_rendered + 1L
       }

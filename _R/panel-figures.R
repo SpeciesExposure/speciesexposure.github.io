@@ -32,6 +32,8 @@ suppressPackageStartupMessages({
   library(patchwork)
 })
 
+source("_R/figure-paths.R")
+
 
 # =============================================================================
 # Constants
@@ -531,7 +533,11 @@ render_species_panels <- function(species_name, range_cells,
       message(sprintf("  [skip] No slug for raster %s", cfg_row$raster_file))
       next
     }
-    out_path <- file.path(out_dir, sprintf("%s__%s.png", species_name, slug))
+    out_path <- species_figure_path(
+      out_dir,
+      species_name,
+      sprintf("%s__%s.png", species_name, slug)
+    )
 
     if (!overwrite && file.exists(out_path)) {
       written <- c(written, out_path)
@@ -549,6 +555,7 @@ render_species_panels <- function(species_name, range_cells,
     )
     if (is.null(fig)) next
 
+    dir.create(dirname(out_path), recursive = TRUE, showWarnings = FALSE)
     ggplot2::ggsave(out_path, plot = fig,
                     width = width, height = height, dpi = dpi, bg = "white")
     written <- c(written, out_path)

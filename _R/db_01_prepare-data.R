@@ -32,6 +32,7 @@ suppressPackageStartupMessages({
 
 # Source the helper functions defined in this project
 source("_R/timeseries-utils.R")
+source("_R/figure-paths.R")
 
 
 # =============================================================================
@@ -395,7 +396,9 @@ dir.create(species_figs_dir, showWarnings = FALSE, recursive = TRUE)
 
 n_polar_written <- 0L
 for (sp_name in names(timeseries_cache)) {
-  out_path <- file.path(species_figs_dir, paste0(sp_name, "_polar.png"))
+  out_path <- species_figure_path(
+    species_figs_dir, sp_name, paste0(sp_name, "_polar.png")
+  )
   if (!file.exists(out_path)) {
     tryCatch({
       p <- build_polar_figure(
@@ -403,6 +406,7 @@ for (sp_name in names(timeseries_cache)) {
         sp_name    = sp_name,
         year_range = polar_year_range
       )
+      dir.create(dirname(out_path), recursive = TRUE, showWarnings = FALSE)
       ggplot2::ggsave(out_path, plot = p, width = 8, height = 8, dpi = 240)
       n_polar_written <- n_polar_written + 1L
     }, error = function(e) {

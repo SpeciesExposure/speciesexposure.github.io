@@ -7,6 +7,8 @@
 # Usage (from apps/dashboard/):
 #   Rscript build.R
 #   Rscript build.R --publish-existing  # sync existing figures and publish only
+#   Rscript build.R --publish-figures   # publish sharded figures branch only
+#   Rscript build.R --publish-figures --force-push-figures
 #
 # Optional: limit to first N species for fast dev iteration:
 #   DEV_N_SPECIES=10 Rscript build.R
@@ -20,9 +22,18 @@ if (!file.exists("_quarto.yml")) {
 
 args <- commandArgs(trailingOnly = TRUE)
 publish_existing <- "--publish-existing" %in% args
-unknown_args <- setdiff(args, "--publish-existing")
+publish_figures <- "--publish-figures" %in% args
+force_push_figures <- "--force-push-figures" %in% args
+known_args <- c("--publish-existing", "--publish-figures", "--force-push-figures")
+unknown_args <- setdiff(args, known_args)
 if (length(unknown_args)) {
   stop("Unknown argument(s): ", paste(unknown_args, collapse = ", "))
+}
+if (publish_existing && publish_figures) {
+  stop("Use either --publish-existing or --publish-figures, not both")
+}
+if (force_push_figures && !publish_figures) {
+  stop("--force-push-figures requires --publish-figures")
 }
 
 # ---------------------------------------------------------------------------
@@ -37,6 +48,18 @@ Sys.setenv(DEV_N_SPECIES = Sys.getenv("DEV_N_SPECIES", ""))
 message(sprintf("DATA_DIR  = %s", Sys.getenv("DATA_DIR")))
 message(sprintf("CACHE_DIR = %s", Sys.getenv("CACHE_DIR")))
 message(sprintf("DEV_N_SPECIES = %s", Sys.getenv("DEV_N_SPECIES")))
+
+if (publish_figures) {
+  message("\n=== Publishing sharded figures branch only ===")
+  publish_cmd <- "sh scripts/publish-species-figures.sh"
+  if (force_push_figures) {
+    message("WARNING: the figures branch will be force-pushed.")
+    publish_cmd <- paste(publish_cmd, "--force-push")
+  }
+  exit_code <- system(publish_cmd)
+  if (exit_code != 0) stop("Figures publish failed (exit code ", exit_code, ")")
+  quit(status = 0)
+}
 
 if (publish_existing) {
   if (!file.exists(file.path("_site", "index.html"))) {
@@ -74,15 +97,16 @@ if (publish_existing) {
     file.remove(old_jsons)
   }
 
+  Sys.setenv(
+    FIGURES_BASE_URL = Sys.getenv(
+      "FIGURES_BASE_URL",
+      "https://raw.githubusercontent.com/SpeciesExposure/speciesexposure.github.io/figures/data/species_figs"
+    )
+  )
+  message(sprintf("FIGURES_BASE_URL = %s", Sys.getenv("FIGURES_BASE_URL")))
   exit_code <- system("quarto render .")
   if (exit_code != 0) stop("quarto render failed (exit code ", exit_code, ")")
 }
-
-# Keep the large figure directory out of Quarto's resource discovery. Sync it
-# only for production builds so `quarto preview` remains fast.
-message("\n=== Step 3.5: Sync species figures ===")
-exit_code <- system("sh copy-species-figures.sh")
-if (exit_code != 0) stop("Copying species figures failed (exit code ", exit_code, ")")
 
 # ---------------------------------------------------------------------------
 # Step 4: Publish to gh-pages

@@ -13,4 +13,4 @@ if [ -L "$target_dir" ]; then
 fi
 
 mkdir -p "$target_dir"
-cp -alu "$source_dir/." "$target_dir/"
+find "$source_dir" -mindepth 1 -maxdepth 1 -type d -exec cp -alu {} "$target_dir" \;

@@ -90,8 +90,11 @@ for (i in seq_along(all_species)) {
   # Cheap pre-skip: if all 6 PNGs already exist and overwrite is off,
   # don't even open the rasters.
   if (!overwrite_panels) {
-    expected <- file.path(out_dir,
-                          sprintf("%s__%s.png", sp, PANEL_SLUG_MAP))
+    expected <- vapply(
+      sprintf("%s__%s.png", sp, PANEL_SLUG_MAP),
+      function(filename) species_figure_path(out_dir, sp, filename),
+      character(1)
+    )
     if (all(file.exists(expected))) {
       n_skip <- n_skip + 1L
       if (i %% 100L == 0L) {

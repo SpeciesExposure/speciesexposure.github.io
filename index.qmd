@@ -348,6 +348,9 @@ default_species <- species_avail[1]
 # Named vector for the variable checkbox: label → code
 var_choices <- setNames(vars_avail, vapply(vars_avail, var_label, character(1)))
 
+figure_base_url <- Sys.getenv("FIGURES_BASE_URL", "data/species_figs")
+figure_base_url <- sub("/$", "", figure_base_url)
+
 # Species metadata passed to OJS for the dynamic species header
 species_display <- species_metadata |>
   dplyr::rename(
@@ -357,6 +360,7 @@ species_display <- species_metadata |>
     `IUCN status` = dplyr::any_of("redlistCategory")
   )
 ojs_define(species_meta_data = species_display)
+ojs_define(figure_base_url = figure_base_url)
 
 # About the number of species and years for the home page
 n_species_total <- nrow(species_metadata)
@@ -577,6 +581,14 @@ ojs_define(
   panel_matrix       = panel_matrix_r,
   panel_var_labels   = panel_var_labels_r
 )
+```
+
+```{ojs}
+//| echo: false
+figureUrl = (species, filename) => {
+  const shard = species.slice(0, 2).toLowerCase();
+  return `${figure_base_url}/${shard}/${filename}`;
+}
 ```
 
 ```{ojs}
@@ -839,7 +851,7 @@ viewof selected_panels = makePanelCheckboxGrid({
   outer.style.cssText = "position:relative;width:100%;height:100%;display:flex;align-items:center;justify-content:center;";
 
   const img = DOM.element("img");
-  img.src = `data/species_figs/${sp}_polar.png`;
+  img.src = figureUrl(sp, `${sp}_polar.png`);
   img.style.cssText = "max-width:100%;max-height:160px;object-fit:contain;display:block;";
   img.onerror = () => {
     const msg = DOM.element("p");
@@ -1048,7 +1060,7 @@ ojs_define(has_species_figs = file.exists("data/species_figs"))
     figure.style.cssText = "margin:0;width:100%;";
 
     const img = DOM.element("img");
-    const src = `data/species_figs/${sp}__${slug}.png`;
+    const src = figureUrl(sp, `${sp}__${slug}.png`);
     img.src = src;
     img.alt = `${selected_species.replace(/_/g, " ")} \u2014 ${slugToLabel.get(slug) ?? slug}`;
     img.title = "Click to enlarge";
