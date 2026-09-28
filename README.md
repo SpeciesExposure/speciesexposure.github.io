@@ -70,6 +70,12 @@ To build the dashboard locally:
 ```bash
 git clone <this-repo>
 cd exposureWeb
+Rscript build.R
+```
+
+Or render only (after caches/figures exist):
+
+```bash
 quarto render index.qmd
 ```
 
@@ -77,10 +83,28 @@ Requirements:
 - [Quarto](https://quarto.org/)
 - R with packages: dplyr, ggplot2, plotly, leaflet, jsonlite, leaflet.extras, DT, terra
 
+### Species allowlist (GitHub Pages size)
+
+The static site only includes species listed in [`config/species-allowlist.csv`](config/species-allowlist.csv) (column `species`). The build applies this filter in `_R/db_01_prepare-data.R` and prunes stale per-species maps/figures so they are not republished.
+
+To change the set later:
+
+1. Edit `config/species-allowlist.csv` (or replace it with a new CSV that has a `species` column; spaces or underscores are fine).
+2. Rebuild with `Rscript build.R`.
+
+Overrides:
+
+```bash
+SPECIES_ALLOWLIST=/path/to/other.csv Rscript build.R   # custom list
+SPECIES_ALLOWLIST=off Rscript build.R                  # all species in source data
+DEV_N_SPECIES=10 Rscript build.R                       # first N after allowlist (dev)
+```
+
 ## Project Structure
 
 - `index.qmd` — Main dashboard definition (Quarto document)
 - `_R/` — R scripts for data processing and figure generation
+- `config/species-allowlist.csv` — Species included in the static dashboard build
 - `data/` — Pre-computed cache files and source data
 - `_site/` — Built dashboard output
 

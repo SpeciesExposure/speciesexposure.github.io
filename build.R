@@ -10,7 +10,11 @@
 #
 # Optional: limit to first N species for fast dev iteration:
 #   DEV_N_SPECIES=10 Rscript build.R
-# Leave DEV_N_SPECIES unset for a full species run.
+# Leave DEV_N_SPECIES unset for a full (allowlisted) production run.
+#
+# Species allowlist (default: config/species-allowlist.csv when present):
+#   SPECIES_ALLOWLIST=/path/to.csv Rscript build.R   # custom list
+#   SPECIES_ALLOWLIST=off Rscript build.R            # every species in data
 # =============================================================================
 
 # Ensure working directory is apps/dashboard/
@@ -37,6 +41,10 @@ Sys.setenv(DEV_N_SPECIES = Sys.getenv("DEV_N_SPECIES", ""))
 message(sprintf("DATA_DIR  = %s", Sys.getenv("DATA_DIR")))
 message(sprintf("CACHE_DIR = %s", Sys.getenv("CACHE_DIR")))
 message(sprintf("DEV_N_SPECIES = %s", Sys.getenv("DEV_N_SPECIES")))
+message(sprintf(
+  "SPECIES_ALLOWLIST = %s",
+  Sys.getenv("SPECIES_ALLOWLIST", unset = "(default: config/species-allowlist.csv if present)")
+))
 
 if (publish_existing) {
   if (!file.exists(file.path("_site", "index.html"))) {
