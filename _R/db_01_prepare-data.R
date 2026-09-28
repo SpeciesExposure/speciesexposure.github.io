@@ -14,8 +14,11 @@
 #   Rscript _R/01_prepare-data.R
 #
 # Environment variables (all optional; defaults listed):
-#   DATA_DIR   – path where downloaded .qs data file lives (default: data/)
-#   CACHE_DIR  – path to write pre-computed cache files   (default: data/)
+#   DATA_DIR           – path where downloaded .qs data file lives (default: data/)
+#   CACHE_DIR          – path to write pre-computed cache files   (default: data/)
+#   SPECIES_ALLOWLIST  – CSV path (default: config/species-allowlist.csv if present);
+#                        set to "off" to include every species in the source data
+#   DEV_N_SPECIES      – integer; after allowlist, keep only the first N species
 # =============================================================================
 
 
@@ -32,6 +35,7 @@ suppressPackageStartupMessages({
 
 # Source the helper functions defined in this project
 source("_R/timeseries-utils.R")
+source("_R/species-allowlist.R")
 
 
 # =============================================================================
@@ -97,17 +101,49 @@ if (year_range[2] > 2025) {
 
 # Build a catalogue of species present in the data
 all_species <- sort(unique(exposure_df$spName))
+n_species_in_data <- length(all_species)
+
+# ---------------------------------------------------------------------------
+# SPECIES ALLOWLIST
+# Restrict the dashboard/build to species listed in config/species-allowlist.csv
+# (column `species`). Names may use spaces or underscores; matching normalizes
+# spaces to underscores. Override path with SPECIES_ALLOWLIST=/path/to.csv, or
+# set SPECIES_ALLOWLIST=off to include every species in the source data.
+# ---------------------------------------------------------------------------
+allow_result <- apply_species_allowlist(all_species)
+if (!is.null(allow_result$path)) {
+  all_species <- allow_result$species
+  cat(sprintf(
+    "[prepare-data] Allowlist %s: %d → %d species (%d allowlisted names absent from data)\n",
+    allow_result$path,
+    allow_result$n_before,
+    allow_result$n_after,
+    allow_result$n_missing
+  ))
+  if (allow_result$n_missing > 0L) {
+    preview <- head(allow_result$missing, 10L)
+    cat(sprintf(
+      "[prepare-data] Allowlist names missing from data (showing %d/%d): %s\n",
+      length(preview), allow_result$n_missing, paste(preview, collapse = ", ")
+    ))
+  }
+  if (!length(all_species)) {
+    stop("[prepare-data] Allowlist matched zero species in the exposure data.")
+  }
+} else {
+  cat("[prepare-data] No species allowlist active (all species in data).\n")
+}
 
 # ---------------------------------------------------------------------------
 # DEV MODE: set DEV_N_SPECIES to a small integer (e.g. "10") to process only
 # the first N species.  Useful for fast iteration during development without
-# waiting for all species to be computed.
+# waiting for all species to be computed. Applied after the allowlist.
 #
 # Usage:
-#   DEV_N_SPECIES=10 Rscript _R/01_prepare-data.R   # shell
-#   Sys.setenv(DEV_N_SPECIES = "10"); source("_R/01_prepare-data.R")  # R
+#   DEV_N_SPECIES=10 Rscript _R/db_01_prepare-data.R   # shell
+#   Sys.setenv(DEV_N_SPECIES = "10"); source("_R/db_01_prepare-data.R")  # R
 #
-# Leave unset (or set to "") for a full production build.
+# Leave unset (or set to "") for a full (allowlisted) production build.
 # ---------------------------------------------------------------------------
 dev_n <- suppressWarnings(as.integer(Sys.getenv("DEV_N_SPECIES", "")))
 if (!is.na(dev_n) && dev_n > 0) {
@@ -118,7 +154,19 @@ if (!is.na(dev_n) && dev_n > 0) {
   ))
 }
 
-cat(sprintf("[prepare-data] Species to process: %d\n", length(all_species)))
+# Keep tables / metadata / hotspot aggregates coherent with the active roster
+exposure_df <- exposure_df |> dplyr::filter(spName %in% all_species)
+
+cat(sprintf(
+  "[prepare-data] Species to process: %d (of %d in source data)\n",
+  length(all_species), n_species_in_data
+))
+
+# Drop stale per-species maps/figures left over from a larger previous build so
+# Quarto resources / copy-species-figures.sh cannot republish them.
+if (!is.null(allow_result$path) || (!is.na(dev_n) && dev_n > 0)) {
+  prune_species_static_assets(all_species)
+}
 
 
 # =============================================================================
