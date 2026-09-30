@@ -6,15 +6,18 @@
 #
 # Usage (from apps/dashboard/):
 #   Rscript build.R
-#   Rscript build.R --publish-existing  # sync existing figures and publish only
+#   Rscript build.R --publish-existing  # sync existing figures to S3 and publish only
 #
 # Optional: limit to first N species for fast dev iteration:
 #   DEV_N_SPECIES=10 Rscript build.R
-# Leave DEV_N_SPECIES unset for a full (allowlisted) production run.
+# Leave DEV_N_SPECIES unset for a full (allowlisted) Species Explorer.
+# DEV_N_SPECIES does not limit the Hotspot Explorer.
 #
-# Species allowlist (default: config/species-allowlist.csv when present):
-#   SPECIES_ALLOWLIST=/path/to.csv Rscript build.R   # custom list
-#   SPECIES_ALLOWLIST=off Rscript build.R            # every species in data
+# Species allowlist (default: config/species-allowlist.csv when present).
+# The allowlist filters the Species Explorer only; the hotspot heatmap
+# always includes every species in the exposure data.
+#   SPECIES_ALLOWLIST=/path/to.csv Rscript build.R   # custom explorer list
+#   SPECIES_ALLOWLIST=off Rscript build.R            # every species in the explorer
 # =============================================================================
 
 # Ensure working directory is apps/dashboard/
@@ -35,7 +38,7 @@ if (length(unknown_args)) {
 # ---------------------------------------------------------------------------
 Sys.setenv(DATA_DIR  = Sys.getenv("DATA_DIR",  "data"))
 Sys.setenv(CACHE_DIR = Sys.getenv("CACHE_DIR", "data"))
-# Sys.setenv(DEV_N_SPECIES = Sys.getenv("DEV_N_SPECIES", "100")) #limit to a smaller number for testing
+#Sys.setenv(DEV_N_SPECIES = Sys.getenv("DEV_N_SPECIES", "100")) #limit to a smaller number for testing
 Sys.setenv(DEV_N_SPECIES = Sys.getenv("DEV_N_SPECIES", ""))
 
 message(sprintf("DATA_DIR  = %s", Sys.getenv("DATA_DIR")))
@@ -86,11 +89,25 @@ if (publish_existing) {
   if (exit_code != 0) stop("quarto render failed (exit code ", exit_code, ")")
 }
 
-# Keep the large figure directory out of Quarto's resource discovery. Sync it
-# only for production builds so `quarto preview` remains fast.
-message("\n=== Step 3.5: Sync species figures ===")
-exit_code <- system("sh copy-species-figures.sh")
-if (exit_code != 0) stop("Copying species figures failed (exit code ", exit_code, ")")
+# Figures are served from CloudFront. Sync them to S3 and keep them out of
+# _site so the GitHub Pages push stays small. Refuse to publish a site that
+# still points at the local figure paths.
+figure_base_url <- sub(
+  "/+$",
+  "",
+  trimws(readLines("config/figure-base-url.txt", warn = FALSE)[1])
+)
+if (!nzchar(figure_base_url)) stop("config/figure-base-url.txt is empty")
+if (system(sprintf("grep -q -F %s _site/index.html", shQuote(figure_base_url))) != 0) {
+  stop(
+    "Rendered site does not reference ", figure_base_url,
+    ". Run a full build before --publish-existing."
+  )
+}
+
+message("\n=== Step 3.5: Sync species figures to S3 ===")
+exit_code <- system("FIGURE_BUCKET=species-exposure sh sync-figures-s3.sh")
+if (exit_code != 0) stop("Syncing species figures to S3 failed (exit code ", exit_code, ")")
 
 # ---------------------------------------------------------------------------
 # Step 4: Publish to gh-pages
@@ -104,14 +121,19 @@ message("\n=== Step 4: Publish to gh-pages ===")
 remote_url <- trimws(system("git remote get-url origin", intern = TRUE))
 message("Remote: ", remote_url)
 
-# Build a fresh single-commit repo inside _site/ and force-push
+# Build a fresh single-commit repo inside _site/ and force-push.
+# Nested repos created here are rejected as "dubious ownership" unless the
+# path is on Git's safe.directory list. Pass it per command so this works
+# without changing the user's git config.
+site_abs <- normalizePath("_site", winslash = "/", mustWork = TRUE)
+git_safe <- paste0("-c ", shQuote(paste0("safe.directory=", site_abs)))
 publish_cmds <- c(
   "cd _site",
-  "git init -b gh-pages",
+  paste("git", git_safe, "init -b gh-pages"),
   "touch .nojekyll",
-  "git add -A",
-  'git -c user.email="build@local" -c user.name="build" commit -m "Deploy to GitHub Pages"',
-  paste0('git push --force "', remote_url, '" gh-pages')
+  paste("git", git_safe, "add -A"),
+  paste("git", git_safe, '-c user.email="build@local" -c user.name="build" commit -m "Deploy to GitHub Pages"'),
+  paste0("git ", git_safe, ' push --force "', remote_url, '" gh-pages')
 )
 exit_code <- system(paste(publish_cmds, collapse = " && "))
 if (exit_code != 0) stop("gh-pages push failed (exit code ", exit_code, ")")

@@ -105,8 +105,13 @@ compute_var_kde_data <- function(val_long, n_grid = N_GRID_DEFAULT,
     dplyr::summarise(val_min = min(value), val_max = max(value), .groups = "drop")
 
   val_range <- range(val_long$value)
-  grid_vals <- seq(val_range[1], val_range[2], length.out = n_grid)
-  grid_step <- diff(grid_vals)[1]
+  if (diff(val_range) == 0) {
+    grid_vals <- val_range[1]
+    grid_step <- max(abs(val_range[1]) * 0.01, 0.01)
+  } else {
+    grid_vals <- seq(val_range[1], val_range[2], length.out = n_grid)
+    grid_step <- diff(grid_vals)[1]
+  }
   all_years <- sort(unique(val_long$year))
 
   hist_ecdf <- stats::ecdf(val_long$value[val_long$year <= period_boundary])
@@ -117,8 +122,19 @@ compute_var_kde_data <- function(val_long, n_grid = N_GRID_DEFAULT,
     dplyr::filter(val_mid >= val_min - grid_step / 2,
                   val_mid <= val_max + grid_step / 2) |>
     dplyr::mutate(
-      ymin = pmax(val_mid - grid_step / 2, val_min),
-      ymax = pmin(val_mid + grid_step / 2, val_max)
+      # A one-cell range has val_min == val_max. Give that observation a
+      # finite-height tile instead of producing an invisible rectangle.
+      point_range = val_min == val_max,
+      ymin = dplyr::if_else(
+        point_range,
+        val_min - grid_step / 2,
+        pmax(val_mid - grid_step / 2, val_min)
+      ),
+      ymax = dplyr::if_else(
+        point_range,
+        val_max + grid_step / 2,
+        pmin(val_mid + grid_step / 2, val_max)
+      )
     )
 
   list(tiles = tiles, hist_ecdf = hist_ecdf, range_lines = range_lines)
@@ -275,7 +291,11 @@ build_single_panel_figure <- function(cfg_row, range_cells, species_name,
 
   # --- 3. Subsampled cell trajectories -------------------------------------
   set.seed(42)
-  cell_sample <- sample(range_cells, min(n_cell_lines, length(range_cells)))
+  # sample(x, 1) treats a length-one numeric x as 1:x. Sample positions so a
+  # one-cell species always retains its actual raster cell identifier.
+  cell_sample <- range_cells[
+    sample.int(length(range_cells), min(n_cell_lines, length(range_cells)))
+  ]
   segs_df <- vals |>
     dplyr::filter(cell %in% cell_sample) |>
     dplyr::arrange(cell, year) |>
@@ -294,8 +314,23 @@ build_single_panel_figure <- function(cfg_row, range_cells, species_name,
     dplyr::filter(!is.na(year_end)) |>
     dplyr::ungroup()
 
-  segs_normal  <- dplyr::filter(segs_df,  is.na(exp_color))
-  segs_exposed <- dplyr::filter(segs_df, !is.na(exp_color))
+  sparse_range <- length(unique(range_cells)) <= 2L
+  if (sparse_range) {
+    segs_normal  <- segs_df[0, , drop = FALSE]
+    segs_exposed <- segs_df[0, , drop = FALSE]
+    tiles_plot_df <- tiles_df[0, , drop = FALSE]
+  } else {
+    segs_normal  <- dplyr::filter(segs_df,  is.na(exp_color))
+    segs_exposed <- dplyr::filter(segs_df, !is.na(exp_color))
+    tiles_plot_df <- tiles_df
+  }
+  point_df <- vals |>
+    dplyr::filter(cell %in% cell_sample) |>
+    dplyr::mutate(
+      pct_range = kde_res$hist_ecdf(value),
+      display_pct = rescale_pct_to_thresholds(pct_range, t_lo_pct, t_up_pct)
+    )
+  if (!sparse_range) point_df <- point_df[0, , drop = FALSE]
 
 
   # --- 4. Color scale (matches explorefiguresv3.r exactly) -----------------
@@ -306,7 +341,7 @@ build_single_panel_figure <- function(cfg_row, range_cells, species_name,
 
 
   # --- 5. KDE heatmap panel ------------------------------------------------
-  p_kde <- ggplot(tiles_df, aes(fill = display_pct)) +
+  p_kde <- ggplot(tiles_plot_df, aes(fill = display_pct)) +
     geom_rect(aes(xmin = year - 0.5, xmax = year + 0.5,
                   ymin = ymin, ymax = ymax)) +
     geom_segment(
@@ -321,6 +356,18 @@ build_single_panel_figure <- function(cfg_row, range_cells, species_name,
           colour = I(exp_color)),
       inherit.aes = FALSE,
       alpha = 0.55, linewidth = 0.35
+    ) +
+    geom_line(
+      data = point_df,
+      aes(x = year, y = value, group = cell),
+      inherit.aes = FALSE,
+      colour = "grey20", alpha = 0.75, linewidth = 0.50
+    ) +
+    geom_point(
+      data = point_df,
+      aes(x = year, y = value, fill = display_pct),
+      inherit.aes = FALSE,
+      shape = 21, colour = "transparent", size = 1.35, stroke = 0
     )
 
   if (!is.null(thresh_df)) {
@@ -370,8 +417,33 @@ build_single_panel_figure <- function(cfg_row, range_cells, species_name,
   rast_last_yr <- max(vals$year)
   recent_vals  <- vals$value[vals$year == rast_last_yr]
 
-  if (length(hist_vals) < 2 || length(recent_vals) < 2) {
-    # Skip density panel if insufficient data; return just the KDE heatmap.
+  # A one-cell range has a single observation in the latest year, so density()
+  # cannot choose a bandwidth. Reuse the historical kernel width (or a small
+  # fallback) so that species still gets a density curve.
+  kernel_density <- function(x, bw = NULL) {
+    x <- x[is.finite(x)]
+    if (!length(x)) return(NULL)
+    spread <- diff(range(x))
+    if (length(x) >= 2L && is.finite(spread) && spread > 0 && is.null(bw)) {
+      return(stats::density(x, adjust = DENS_ADJUST, n = 256))
+    }
+    if (is.null(bw) || !is.finite(bw) || bw <= 0) {
+      bw <- max(abs(x[1]) * 0.02, 0.05, na.rm = TRUE) * DENS_ADJUST
+    }
+    stats::density(x, bw = bw, adjust = 1, n = 256)
+  }
+
+  dh <- kernel_density(hist_vals)
+  recent_spread <- diff(range(recent_vals[is.finite(recent_vals)]))
+  recent_bw <- if (length(recent_vals[is.finite(recent_vals)]) < 2L ||
+                   !is.finite(recent_spread) || recent_spread <= 0) {
+    if (!is.null(dh)) dh$bw else NULL
+  } else {
+    NULL
+  }
+  dr <- kernel_density(recent_vals, bw = recent_bw)
+
+  if (is.null(dh) && is.null(dr)) {
     y_floor_fb <- if (cfg$family == "Precipitation") 0 else NA_real_
     raw_lo_fb  <- min(tiles_df$ymin)
     raw_hi_fb  <- max(tiles_df$ymax)
@@ -394,17 +466,18 @@ build_single_panel_figure <- function(cfg_row, range_cells, species_name,
     )
   }
 
-  dh <- density(hist_vals,   adjust = DENS_ADJUST, n = 256)
-  dr <- density(recent_vals, adjust = DENS_ADJUST, n = 256)
-
   hist_period_lbl <- sprintf("1941\u2013%d", period_boundary)
   last_period_lbl <- as.character(rast_last_yr)
 
+  dens_one <- function(dens, period) {
+    if (is.null(dens)) return(NULL)
+    peak <- max(dens$y)
+    if (!is.finite(peak) || peak <= 0) return(NULL)
+    tibble::tibble(value = dens$x, density = dens$y / peak, period = period)
+  }
   dens_df <- dplyr::bind_rows(
-    tibble::tibble(value = dh$x, density = dh$y / max(dh$y),
-                   period = hist_period_lbl),
-    tibble::tibble(value = dr$x, density = dr$y / max(dr$y),
-                   period = last_period_lbl)
+    dens_one(dh, hist_period_lbl),
+    dens_one(dr, last_period_lbl)
   )
 
   # --- Shared display y-range -------------------------------------------

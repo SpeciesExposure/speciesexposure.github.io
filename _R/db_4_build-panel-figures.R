@@ -39,6 +39,7 @@ for (p in c(allcell_path, ts_cache_path)) {
 }
 
 overwrite_panels <- isTRUE(Sys.getenv("OVERWRITE_PANELS") == "1")
+plot_code_mtime <- file.info("_R/panel-figures.R")$mtime
 
 
 # =============================================================================
@@ -86,12 +87,19 @@ for (i in seq_along(all_species)) {
   }
 
   range_cells <- unique(allcell_sp$cell)
+  expected <- file.path(out_dir,
+                        sprintf("%s__%s.png", sp, PANEL_SLUG_MAP))
+
+  # The sparse-range rendering fallback was added after many one-cell PNGs
+  # had already been cached. Refresh those stale files automatically once;
+  # larger-range figures retain the normal skip-if-exists behavior.
+  refresh_sparse <- length(range_cells) <= 2L &&
+    any(!file.exists(expected) |
+          file.info(expected)$mtime < plot_code_mtime, na.rm = TRUE)
 
   # Cheap pre-skip: if all 6 PNGs already exist and overwrite is off,
   # don't even open the rasters.
-  if (!overwrite_panels) {
-    expected <- file.path(out_dir,
-                          sprintf("%s__%s.png", sp, PANEL_SLUG_MAP))
+  if (!overwrite_panels && !refresh_sparse) {
     if (all(file.exists(expected))) {
       n_skip <- n_skip + 1L
       if (i %% 100L == 0L) {
@@ -109,7 +117,7 @@ for (i in seq_along(all_species)) {
       raster_config = RASTER_CONFIG,
       rast_dir      = rast_dir,
       out_dir       = out_dir,
-      overwrite     = overwrite_panels
+      overwrite     = overwrite_panels || refresh_sparse
     )
     TRUE
   }, error = function(e) {

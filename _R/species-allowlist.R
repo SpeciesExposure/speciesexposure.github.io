@@ -1,7 +1,8 @@
 # =============================================================================
 # species-allowlist.R
 #
-# Shared helpers for restricting the dashboard species set to an allowlist CSV.
+# Shared helpers for restricting the Species Explorer to an allowlist CSV.
+# The Hotspot Explorer is not filtered by this list.
 # Default list: config/species-allowlist.csv (column `species`).
 #
 # Environment variables:

@@ -17,8 +17,11 @@
 #   DATA_DIR           – path where downloaded .qs data file lives (default: data/)
 #   CACHE_DIR          – path to write pre-computed cache files   (default: data/)
 #   SPECIES_ALLOWLIST  – CSV path (default: config/species-allowlist.csv if present);
-#                        set to "off" to include every species in the source data
+#                        filters the Species Explorer only. The Hotspot Explorer
+#                        always uses every species in the source data.
+#                        set to "off" to include every species in the explorer too
 #   DEV_N_SPECIES      – integer; after allowlist, keep only the first N species
+#                        in the Species Explorer. Does not limit the hotspot.
 # =============================================================================
 
 
@@ -99,22 +102,29 @@ if (year_range[2] > 2025) {
   exposure_df <- exposure_df |> dplyr::filter(year <= 2025)
 }
 
+# Full exposure table for the Hotspot Explorer. The allowlist below does not
+# touch this copy: the heatmap and cell lookup include every species.
+hotspot_exposure_df <- exposure_df
+
 # Build a catalogue of species present in the data
-all_species <- sort(unique(exposure_df$spName))
+all_species <- sort(unique(hotspot_exposure_df$spName))
 n_species_in_data <- length(all_species)
+n_hotspot_species <- n_species_in_data
 
 # ---------------------------------------------------------------------------
 # SPECIES ALLOWLIST
-# Restrict the dashboard/build to species listed in config/species-allowlist.csv
-# (column `species`). Names may use spaces or underscores; matching normalizes
-# spaces to underscores. Override path with SPECIES_ALLOWLIST=/path/to.csv, or
-# set SPECIES_ALLOWLIST=off to include every species in the source data.
+# Restrict the Species Explorer (timeseries, metadata, polar figures, range
+# maps, species menu) to config/species-allowlist.csv (column `species`).
+# Names may use spaces or underscores; matching normalizes spaces to
+# underscores. Override path with SPECIES_ALLOWLIST=/path/to.csv, or set
+# SPECIES_ALLOWLIST=off to include every species in the explorer as well.
+# The Hotspot Explorer keeps hotspot_exposure_df unfiltered.
 # ---------------------------------------------------------------------------
 allow_result <- apply_species_allowlist(all_species)
 if (!is.null(allow_result$path)) {
   all_species <- allow_result$species
   cat(sprintf(
-    "[prepare-data] Allowlist %s: %d → %d species (%d allowlisted names absent from data)\n",
+    "[prepare-data] Explorer allowlist %s: %d → %d species (%d allowlisted names absent from data)\n",
     allow_result$path,
     allow_result$n_before,
     allow_result$n_after,
@@ -131,39 +141,40 @@ if (!is.null(allow_result$path)) {
     stop("[prepare-data] Allowlist matched zero species in the exposure data.")
   }
 } else {
-  cat("[prepare-data] No species allowlist active (all species in data).\n")
+  cat("[prepare-data] No species allowlist active (explorer includes every species).\n")
 }
 
 # ---------------------------------------------------------------------------
 # DEV MODE: set DEV_N_SPECIES to a small integer (e.g. "10") to process only
-# the first N species.  Useful for fast iteration during development without
-# waiting for all species to be computed. Applied after the allowlist.
+# the first N Species Explorer species.  Useful for fast iteration during
+# development without waiting for every explorer species to be computed.
+# Applied after the allowlist. Does not limit the hotspot heatmap.
 #
 # Usage:
 #   DEV_N_SPECIES=10 Rscript _R/db_01_prepare-data.R   # shell
 #   Sys.setenv(DEV_N_SPECIES = "10"); source("_R/db_01_prepare-data.R")  # R
 #
-# Leave unset (or set to "") for a full (allowlisted) production build.
+# Leave unset (or set to "") for a full (allowlisted) explorer build.
 # ---------------------------------------------------------------------------
 dev_n <- suppressWarnings(as.integer(Sys.getenv("DEV_N_SPECIES", "")))
 if (!is.na(dev_n) && dev_n > 0) {
   all_species <- head(all_species, dev_n)
   cat(sprintf(
-    "[prepare-data] DEV MODE: limiting to first %d species (set DEV_N_SPECIES= to disable)\n",
+    "[prepare-data] DEV MODE: limiting Species Explorer to first %d species (set DEV_N_SPECIES= to disable)\n",
     dev_n
   ))
 }
 
-# Keep tables / metadata / hotspot aggregates coherent with the active roster
-exposure_df <- exposure_df |> dplyr::filter(spName %in% all_species)
+# Explorer tables only. Hotspot aggregates stay on hotspot_exposure_df.
+exposure_df <- hotspot_exposure_df |> dplyr::filter(spName %in% all_species)
 
 cat(sprintf(
-  "[prepare-data] Species to process: %d (of %d in source data)\n",
-  length(all_species), n_species_in_data
+  "[prepare-data] Species Explorer: %d species. Hotspot Explorer: %d species (of %d in source data)\n",
+  length(all_species), n_hotspot_species, n_species_in_data
 ))
 
 # Drop stale per-species maps/figures left over from a larger previous build so
-# Quarto resources / copy-species-figures.sh cannot republish them.
+# they are not synced to S3 or republished.
 if (!is.null(allow_result$path) || (!is.na(dev_n) && dev_n > 0)) {
   prune_species_static_assets(all_species)
 }
@@ -336,7 +347,7 @@ cat(sprintf(
 
 cat("[prepare-data] Building year index...\n")
 
-year_index <- split(seq_len(nrow(exposure_df)), exposure_df$year)
+year_index <- split(seq_len(nrow(hotspot_exposure_df)), hotspot_exposure_df$year)
 
 cat(sprintf(
   "[prepare-data] Year index built: %d years (%d – %d)\n",
@@ -356,7 +367,7 @@ cat(sprintf(
 
 cat("[prepare-data] Building cell-level trend table (species count per cell × year)...\n")
 
-cell_trend_df <- exposure_df |>
+cell_trend_df <- hotspot_exposure_df |>
   dplyr::distinct(spName, cell, year) |>   # one row per unique (sp, cell, year)
   dplyr::count(cell, year, name = "n_species_exposed")
 
@@ -387,16 +398,17 @@ meta_path <- file.path(cache_dir, "species-metadata.rds")
 saveRDS(species_metadata, meta_path)
 cat(sprintf("[prepare-data] Saved: %s\n", meta_path))
 
-# Slimmed exposure data + year index (for hotspot and species map tabs)
+# Hotspot tables include every source species. species_avail is the
+# Species Explorer roster (allowlist, then DEV_N_SPECIES).
 exposure_path_out <- file.path(cache_dir, "exposure-dashboard.rds")
 saveRDS(
   list(
-    exposure_df  = exposure_df,
-    year_index   = year_index,
-    cell_trend   = cell_trend_df,
-    sp_trend     = sp_trend_df,
-    years_avail  = sort(unique(exposure_df$year)),
-    vars_avail   = sort(unique(exposure_df$var)),
+    exposure_df   = hotspot_exposure_df,
+    year_index    = year_index,
+    cell_trend    = cell_trend_df,
+    sp_trend      = sp_trend_df,
+    years_avail   = sort(unique(hotspot_exposure_df$year)),
+    vars_avail    = sort(unique(hotspot_exposure_df$var)),
     species_avail = all_species
   ),
   exposure_path_out
@@ -406,12 +418,13 @@ cat(sprintf("[prepare-data] Saved: %s  (%.1f MB)\n",
 
 # Manifest: records what was computed and when (useful for debugging CI runs)
 manifest <- list(
-  computed_at     = format(Sys.time(), "%Y-%m-%d %H:%M:%S UTC", tz = "UTC"),
-  n_species       = length(all_species),
-  year_min        = year_range[1],
-  year_max        = min(year_range[2], 2025L),
-  source_file     = exposure_path,
-  cache_files     = c(cache_path, meta_path, exposure_path_out)
+  computed_at       = format(Sys.time(), "%Y-%m-%d %H:%M:%S UTC", tz = "UTC"),
+  n_species         = length(all_species),
+  n_hotspot_species = n_hotspot_species,
+  year_min          = year_range[1],
+  year_max          = min(year_range[2], 2025L),
+  source_file       = exposure_path,
+  cache_files       = c(cache_path, meta_path, exposure_path_out)
 )
 manifest_path <- file.path(cache_dir, "build-manifest.rds")
 saveRDS(manifest, manifest_path)

@@ -196,6 +196,80 @@ format:
   margin: 0;
 }
 
+/* Dual-thumb range for proportion of range exposed */
+.dual-range {
+  position: relative;
+  height: 28px;
+  margin: 4px 2px 0;
+}
+.dual-range-track,
+.dual-range-fill {
+  position: absolute;
+  top: 12px;
+  height: 4px;
+  border-radius: 2px;
+}
+.dual-range-track {
+  left: 0;
+  right: 0;
+  background: #dee2e6;
+}
+.dual-range-fill {
+  background: #2c7fb8;
+}
+.dual-range input[type="range"] {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 28px;
+  margin: 0;
+  background: none;
+  pointer-events: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.dual-range input[type="range"]:focus {
+  outline: none;
+}
+.dual-range input[type="range"]::-webkit-slider-runnable-track {
+  background: transparent;
+  height: 4px;
+}
+.dual-range input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  pointer-events: auto;
+  width: 16px;
+  height: 16px;
+  margin-top: -6px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid #2c7fb8;
+  cursor: grab;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+.dual-range input[type="range"]::-moz-range-track {
+  background: transparent;
+  height: 4px;
+  border: none;
+}
+.dual-range input[type="range"]::-moz-range-thumb {
+  pointer-events: auto;
+  width: 16px;
+  height: 16px;
+  border: 2px solid #2c7fb8;
+  border-radius: 50%;
+  background: #fff;
+  cursor: grab;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+.dual-range-readout,
+.species-count {
+  font-size: 0.75rem;
+  color: #6c757d;
+  margin-top: 2px;
+}
+
 /* ---- Species-Explorer figure stack (one img per selected panel) */
 .panel-figure-stack {
   display: flex;
@@ -257,6 +331,15 @@ window.addEventListener("load", () => {
 # Reads the pre-computed cache files produced by _R/01_prepare-data.R.
 # No heavy computation happens here; all summarisation was done at build time.
 # =============================================================================
+
+figure_base_url <- sub(
+  "/+$",
+  "",
+  trimws(readLines("config/figure-base-url.txt", warn = FALSE)[1])
+)
+if (!nzchar(figure_base_url)) {
+  stop("config/figure-base-url.txt is empty")
+}
 
 library(dplyr)
 library(ggplot2)
@@ -348,8 +431,71 @@ default_species <- species_avail[1]
 # Named vector for the variable checkbox: label → code
 var_choices <- setNames(vars_avail, vapply(vars_avail, var_label, character(1)))
 
+# Proportion of range exposed: the largest share of a species' range exposed
+# to a single climate variable. Prefer the curated allowlist fraction; fall
+# back to the peak single-variable percent in the timeseries cache.
+cache_prop <- vapply(species_metadata$spName, function(sp) {
+  hm <- ts_cache[[sp]]$var_heatmap
+  if (is.null(hm) || !nrow(hm)) return(NA_real_)
+  pct <- hm$pct_exposed[is.finite(hm$pct_exposed)]
+  if (!length(pct)) return(NA_real_)
+  max(pct)
+}, numeric(1))
+names(cache_prop) <- species_metadata$spName
+
+allow_prop <- NULL
+allow_range <- NULL
+allow_csv <- file.path("config", "species-allowlist.csv")
+if (file.exists(allow_csv)) {
+  allow_df <- utils::read.csv(allow_csv, stringsAsFactors = FALSE, check.names = FALSE)
+  keys <- if ("species" %in% names(allow_df)) {
+    gsub("[[:space:]]+", "_", trimws(allow_df$species))
+  } else {
+    character()
+  }
+  if (length(keys) && "max_single_variable_fraction" %in% names(allow_df)) {
+    vals <- as.numeric(allow_df$max_single_variable_fraction) * 100
+    ok <- !is.na(keys) & nzchar(keys) & is.finite(vals)
+    if (any(ok)) allow_prop <- tapply(vals[ok], keys[ok], max)
+  }
+  if (length(keys) && "range_cells" %in% names(allow_df)) {
+    vals <- as.numeric(allow_df$range_cells)
+    ok <- !is.na(keys) & nzchar(keys) & is.finite(vals) & vals > 0
+    if (any(ok)) allow_range <- tapply(vals[ok], keys[ok], max)
+  }
+}
+
+# Grid-cell range size. Prefer the allowlist count; otherwise recover it from
+# a polar slice (unique exposed cells / percent of range).
+cache_range <- vapply(species_metadata$spName, function(sp) {
+  pd <- ts_cache[[sp]]$polar_data
+  if (is.null(pd) || !nrow(pd)) return(NA_real_)
+  hit <- pd[is.finite(pd$n_unique) & pd$n_unique > 0 &
+              is.finite(pd$pct_range) & pd$pct_range > 0, ]
+  if (!nrow(hit)) return(NA_real_)
+  hit$n_unique[1] / (hit$pct_range[1] / 100)
+}, numeric(1))
+names(cache_range) <- species_metadata$spName
+
+prop_range <- cache_prop[species_metadata$spName]
+range_cells <- cache_range[species_metadata$spName]
+if (!is.null(allow_prop)) {
+  from_allow <- allow_prop[species_metadata$spName]
+  use_allow <- !is.na(from_allow)
+  prop_range[use_allow] <- from_allow[use_allow]
+}
+if (!is.null(allow_range)) {
+  from_allow <- allow_range[species_metadata$spName]
+  use_allow <- !is.na(from_allow)
+  range_cells[use_allow] <- from_allow[use_allow]
+}
+
 # Species metadata passed to OJS for the dynamic species header
 species_display <- species_metadata |>
+  dplyr::mutate(
+    prop_range  = round(unname(prop_range), 1),
+    range_cells = round(unname(range_cells))
+  ) |>
   dplyr::rename(
     Species       = spName,
     Order         = dplyr::any_of("orderName"),
@@ -357,6 +503,7 @@ species_display <- species_metadata |>
     `IUCN status` = dplyr::any_of("redlistCategory")
   )
 ojs_define(species_meta_data = species_display)
+ojs_define(figure_base_url = figure_base_url)
 
 # About the number of species and years for the home page
 n_species_total <- nrow(species_metadata)
@@ -370,6 +517,13 @@ year_max        <- max(years_avail)
 ## Row
 
 ### Col {width="65%"}
+
+```{r figure-base-script, echo=FALSE, results='asis'}
+cat(sprintf(
+  '<script>window.FIGURE_BASE_URL=%s;</script>\n',
+  jsonlite::toJSON(figure_base_url, auto_unbox = TRUE)
+))
+```
 
 ```{=html}
 <div style="max-width:680px; padding: 1.5rem 0.5rem;">
@@ -399,7 +553,7 @@ from 1940 to the present.
   </li>
   <li>
     <strong>Shiny app</strong> — for more flexible filtering and custom data exploration, download and run the full interactive Shiny app from
-    <a href="https://github.com/SpeciesExposure/exposureApp" target="_blank">github.com/SpeciesExposure/exposureApp</a>. <img src="img/shinyApp.png" alt="Screenshot of the Shiny app showing a species timeseries and map" style="max-width:50%; border:1px solid #ddd; border-radius:4px; margin:1rem 0;">
+    <a href="https://github.com/SpeciesExposure/exposureApp" target="_blank">github.com/SpeciesExposure/exposureApp</a>. <img id="shiny-app-shot" alt="Screenshot of the Shiny app showing a species timeseries and map" style="max-width:50%; border:1px solid #ddd; border-radius:4px; margin:1rem 0;"><script>document.getElementById("shiny-app-shot").src = window.FIGURE_BASE_URL + "/img/shinyApp.png";</script>
   </li>
 </ul>
 
@@ -461,7 +615,7 @@ htmltools::tagList(
       ),
       htmltools::tags$div(
         style = "font-size:0.85rem; color:#555; margin-top:0.2rem;",
-        "species with range maps"
+        "species with >25% range exposed"
       )
     ),
     htmltools::tags$div(
@@ -598,17 +752,39 @@ viewof selected_species = {
   const normalizeTaxon = value => value == null || String(value).trim() === ""
     ? "Unknown"
     : String(value);
+  const formatPct = (prop) => {
+    if (prop == null || Number.isNaN(prop)) return "\u2014";
+    const rounded = Math.round(prop * 10) / 10;
+    const text = Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+    return `${text}%`;
+  };
+
+  const asNumber = (raw) => {
+    if (raw == null || raw === "" || Number.isNaN(Number(raw))) return null;
+    return Number(raw);
+  };
+  const formatCells = (n) => {
+    if (n == null || Number.isNaN(n)) return "\u2014";
+    const cells = Math.round(n);
+    return `${cells} ${cells === 1 ? "cell" : "cells"}`;
+  };
+
   const catalogue = species_list.map(species => {
     const metadata = metadataBySpecies.get(species) ?? {};
     return {
       value: species,
       text: species.replace(/_/g, " "),
       order: normalizeTaxon(metadata.Order),
-      family: normalizeTaxon(metadata.Family)
+      family: normalizeTaxon(metadata.Family),
+      prop: asNumber(metadata.prop_range),
+      rangeCells: asNumber(metadata.range_cells)
     };
   });
-  const orders = [...new Set(catalogue.map(row => row.order))]
-    .sort((a, b) => a.localeCompare(b));
+  const knownSizes = catalogue
+    .map(row => row.rangeCells)
+    .filter(size => size != null && Number.isFinite(size));
+  const sizeFloor = knownSizes.length ? Math.min(...knownSizes) : 1;
+  const sizeCeil = knownSizes.length ? Math.max(...knownSizes) : sizeFloor;
 
   const makeLabel = (text, marginTop = "0") => {
     const label = document.createElement("label");
@@ -627,18 +803,117 @@ viewof selected_species = {
   const wrapper = document.createElement("div");
   const orderSelect = document.createElement("select");
   const familySelect = document.createElement("select");
+  const sortSelect = document.createElement("select");
   const speciesSelect = document.createElement("select");
+  orderSelect.style.width = "100%";
+  familySelect.style.width = "100%";
+  sortSelect.style.width = "100%";
 
   addChoice(orderSelect, "", "All orders");
-  orders.forEach(order => addChoice(orderSelect, order, order));
   addChoice(familySelect, "", "All families");
+  addChoice(sortSelect, "alpha", "Alphabetical");
+  addChoice(sortSelect, "prop", "Proportion of range exposed");
+
+  const makeDualSlider = ({ lo, hi, step, format, ariaMin, ariaMax }) => {
+    const box = document.createElement("div");
+    box.className = "dual-range";
+    const track = document.createElement("div");
+    track.className = "dual-range-track";
+    const fill = document.createElement("div");
+    fill.className = "dual-range-fill";
+    const minInput = document.createElement("input");
+    const maxInput = document.createElement("input");
+    for (const input of [minInput, maxInput]) {
+      input.type = "range";
+      input.min = String(lo);
+      input.max = String(hi);
+      input.step = String(step);
+    }
+    minInput.value = String(lo);
+    maxInput.value = String(hi);
+    minInput.setAttribute("aria-label", ariaMin);
+    maxInput.setAttribute("aria-label", ariaMax);
+    box.append(track, fill, minInput, maxInput);
+    const readout = document.createElement("div");
+    readout.className = "dual-range-readout";
+
+    const bounds = () => ({
+      min: Number(minInput.value),
+      max: Number(maxInput.value)
+    });
+    const update = (source) => {
+      let min = Number(minInput.value);
+      let max = Number(maxInput.value);
+      if (min > max) {
+        if (source === minInput) {
+          max = min;
+          maxInput.value = String(max);
+        } else {
+          min = max;
+          minInput.value = String(min);
+        }
+      }
+      const span = hi - lo;
+      const left = span === 0 ? 0 : (min - lo) / span * 100;
+      const width = span === 0 ? 100 : (max - min) / span * 100;
+      fill.style.left = `${left}%`;
+      fill.style.width = `${width}%`;
+      readout.textContent = format(min, max);
+      const nearEnd = span === 0 || min >= max - Math.max(span * 0.05, step);
+      minInput.style.zIndex = nearEnd ? "5" : "3";
+      maxInput.style.zIndex = "4";
+    };
+    const includes = (value) => {
+      const { min, max } = bounds();
+      if (value == null || Number.isNaN(value)) return min <= lo && max >= hi;
+      return value >= min && value <= max;
+    };
+    return { box, readout, minInput, maxInput, update, includes };
+  };
+
+  const exposureSlider = makeDualSlider({
+    lo: 0,
+    hi: 100,
+    step: 1,
+    format: (min, max) => `${min}% \u2013 ${max}%`,
+    ariaMin: "Minimum proportion of range exposed",
+    ariaMax: "Maximum proportion of range exposed"
+  });
+  const sizeSlider = makeDualSlider({
+    lo: sizeFloor,
+    hi: sizeCeil,
+    step: 1,
+    format: (min, max) => `${formatCells(min)} \u2013 ${formatCells(max)}`,
+    ariaMin: "Minimum range size in cells",
+    ariaMax: "Maximum range size in cells"
+  });
+
+  const rangeHint = document.createElement("div");
+  rangeHint.className = "dual-range-readout";
+  rangeHint.textContent = "Largest share of the range exposed to one climate variable.";
+  const sizeHint = document.createElement("div");
+  sizeHint.className = "dual-range-readout";
+  sizeHint.textContent = "Number of grid cells in the geographic range.";
+  const speciesCount = document.createElement("div");
+  speciesCount.className = "species-count";
 
   wrapper.appendChild(makeLabel("Order"));
   wrapper.appendChild(orderSelect);
   wrapper.appendChild(makeLabel("Family", "8px"));
   wrapper.appendChild(familySelect);
+  wrapper.appendChild(makeLabel("Proportion of range exposed", "8px"));
+  wrapper.appendChild(exposureSlider.box);
+  wrapper.appendChild(exposureSlider.readout);
+  wrapper.appendChild(rangeHint);
+  wrapper.appendChild(makeLabel("Range size", "8px"));
+  wrapper.appendChild(sizeSlider.box);
+  wrapper.appendChild(sizeSlider.readout);
+  wrapper.appendChild(sizeHint);
+  wrapper.appendChild(makeLabel("Sort", "8px"));
+  wrapper.appendChild(sortSelect);
   wrapper.appendChild(makeLabel("Species", "8px"));
   wrapper.appendChild(speciesSelect);
+  wrapper.appendChild(speciesCount);
   Object.defineProperty(wrapper, "value", { get: () => speciesSelect.value });
   yield wrapper;
 
@@ -654,16 +929,35 @@ viewof selected_species = {
     placeholder: "Type to search species...",
     dropdownParent: "body",
     render: {
+      option: (data, escape) => `<div style="display:flex;justify-content:space-between;gap:12px;">
+          <span>${escape(data.text)}</span>
+          <span style="color:#6c757d;font-variant-numeric:tabular-nums;">${formatPct(data.prop)} \u00b7 ${formatCells(data.rangeCells)}</span>
+        </div>`,
+      item: (data, escape) => `<div>${escape(data.text)}</div>`,
       no_results: () => '<div class="no-results">No matching species</div>'
     },
     onChange: () => wrapper.dispatchEvent(new Event("input", { bubbles: true }))
   });
+
+  const passesFilters = (row) =>
+    exposureSlider.includes(row.prop) && sizeSlider.includes(row.rangeCells);
+
+  const rebuildOrders = () => {
+    const previous = orderSelect.value;
+    const orders = [...new Set(catalogue.filter(passesFilters).map(row => row.order))]
+      .sort((a, b) => a.localeCompare(b));
+    orderSelect.replaceChildren();
+    addChoice(orderSelect, "", "All orders");
+    orders.forEach(order => addChoice(orderSelect, order, order));
+    orderSelect.value = orders.includes(previous) ? previous : "";
+  };
 
   const rebuildFamilies = () => {
     const selectedOrder = orderSelect.value;
     const previousFamily = familySelect.value;
     const families = new Map();
     for (const row of catalogue) {
+      if (!passesFilters(row)) continue;
       if (selectedOrder && row.order !== selectedOrder) continue;
       const key = `${row.order}\u001f${row.family}`;
       const label = selectedOrder ? row.family : `${row.family} — ${row.order}`;
@@ -681,29 +975,57 @@ viewof selected_species = {
   const rebuildSpecies = () => {
     const selectedOrder = orderSelect.value;
     const selectedFamily = familySelect.value;
+    const sortByProp = sortSelect.value === "prop";
     const previousSpecies = speciesControl.getValue();
     const filtered = catalogue.filter(row => {
       const familyKey = `${row.order}\u001f${row.family}`;
-      return (!selectedOrder || row.order === selectedOrder) &&
+      return passesFilters(row) &&
+        (!selectedOrder || row.order === selectedOrder) &&
         (!selectedFamily || familyKey === selectedFamily);
     });
+    const ranked = sortByProp
+      ? [...filtered].sort((a, b) => (b.prop ?? -1) - (a.prop ?? -1) || a.text.localeCompare(b.text))
+      : filtered;
+
+    speciesControl.settings.sortField = sortByProp
+      ? [{ field: "$score", direction: "desc" }, { field: "prop", direction: "desc" }, { field: "text", direction: "asc" }]
+      : [{ field: "$score", direction: "desc" }, { field: "text", direction: "asc" }];
 
     speciesControl.clear(true);
     speciesControl.clearOptions();
     speciesControl.clearOptionGroups();
-    [...new Set(filtered.map(row => row.order))]
-      .sort((a, b) => a.localeCompare(b))
-      .forEach(order => speciesControl.addOptionGroup(order, { value: order, label: order }));
-    speciesControl.addOptions(filtered);
+    if (!sortByProp) {
+      [...new Set(ranked.map(row => row.order))]
+        .sort((a, b) => a.localeCompare(b))
+        .forEach(order => speciesControl.addOptionGroup(order, { value: order, label: order }));
+      speciesControl.addOptions(ranked);
+    } else {
+      // Flat list so the exposure ranking is not broken up by taxonomic order.
+      speciesControl.addOptions(ranked.map(({ order, ...row }) => row));
+    }
 
-    const nextSpecies = filtered.some(row => row.value === previousSpecies)
+    const nextSpecies = ranked.some(row => row.value === previousSpecies)
       ? previousSpecies
-      : filtered[0]?.value ?? "";
+      : ranked[0]?.value ?? "";
     speciesControl.setValue(nextSpecies, true);
     speciesControl.refreshOptions(false);
+    speciesCount.textContent = filtered.length
+      ? `${filtered.length} species`
+      : "No species match these filters";
     if (nextSpecies !== previousSpecies) {
       wrapper.dispatchEvent(new Event("input", { bubbles: true }));
     }
+  };
+
+  let filterTimer = 0;
+  const applyFilters = (slider, source) => {
+    slider.update(source);
+    clearTimeout(filterTimer);
+    filterTimer = setTimeout(() => {
+      rebuildOrders();
+      rebuildFamilies();
+      rebuildSpecies();
+    }, 60);
   };
 
   orderSelect.addEventListener("change", () => {
@@ -711,7 +1033,15 @@ viewof selected_species = {
     rebuildSpecies();
   });
   familySelect.addEventListener("change", rebuildSpecies);
+  sortSelect.addEventListener("change", rebuildSpecies);
+  exposureSlider.minInput.addEventListener("input", () => applyFilters(exposureSlider, exposureSlider.minInput));
+  exposureSlider.maxInput.addEventListener("input", () => applyFilters(exposureSlider, exposureSlider.maxInput));
+  sizeSlider.minInput.addEventListener("input", () => applyFilters(sizeSlider, sizeSlider.minInput));
+  sizeSlider.maxInput.addEventListener("input", () => applyFilters(sizeSlider, sizeSlider.maxInput));
 
+  exposureSlider.update();
+  sizeSlider.update();
+  rebuildOrders();
   rebuildFamilies();
   rebuildSpecies();
 
@@ -839,7 +1169,7 @@ viewof selected_panels = makePanelCheckboxGrid({
   outer.style.cssText = "position:relative;width:100%;height:100%;display:flex;align-items:center;justify-content:center;";
 
   const img = DOM.element("img");
-  img.src = `data/species_figs/${sp}_polar.png`;
+  img.src = `${figure_base_url}/species_figs/${sp}_polar.png`;
   img.style.cssText = "max-width:100%;max-height:160px;object-fit:contain;display:block;";
   img.onerror = () => {
     const msg = DOM.element("p");
@@ -1006,10 +1336,6 @@ species_range_map = {
 
 ### Row
 
-```{r species-figures-data, echo=FALSE}
-ojs_define(has_species_figs = file.exists("data/species_figs"))
-```
-
 ```{ojs}
 //| echo: false
 {
@@ -1048,7 +1374,7 @@ ojs_define(has_species_figs = file.exists("data/species_figs"))
     figure.style.cssText = "margin:0;width:100%;";
 
     const img = DOM.element("img");
-    const src = `data/species_figs/${sp}__${slug}.png`;
+    const src = `${figure_base_url}/species_figs/${sp}__${slug}.png`;
     img.src = src;
     img.alt = `${selected_species.replace(/_/g, " ")} \u2014 ${slugToLabel.get(slug) ?? slug}`;
     img.title = "Click to enlarge";
