@@ -6,7 +6,8 @@
 #
 # Usage (from apps/dashboard/):
 #   Rscript build.R
-#   Rscript build.R --publish-existing  # sync existing figures to S3 and publish only
+#   Rscript build.R --local              # prepare, render, and stop (no S3, no gh-pages)
+#   Rscript build.R --publish-existing   # sync existing figures to S3 and publish only
 #
 # Optional: limit to first N species for fast dev iteration:
 #   DEV_N_SPECIES=10 Rscript build.R
@@ -27,9 +28,13 @@ if (!file.exists("_quarto.yml")) {
 
 args <- commandArgs(trailingOnly = TRUE)
 publish_existing <- "--publish-existing" %in% args
-unknown_args <- setdiff(args, "--publish-existing")
+local_preview <- "--local" %in% args
+unknown_args <- setdiff(args, c("--publish-existing", "--local"))
 if (length(unknown_args)) {
   stop("Unknown argument(s): ", paste(unknown_args, collapse = ", "))
+}
+if (publish_existing && local_preview) {
+  stop("Use either --local or --publish-existing, not both.")
 }
 
 # ---------------------------------------------------------------------------
@@ -38,7 +43,7 @@ if (length(unknown_args)) {
 # ---------------------------------------------------------------------------
 Sys.setenv(DATA_DIR  = Sys.getenv("DATA_DIR",  "data"))
 Sys.setenv(CACHE_DIR = Sys.getenv("CACHE_DIR", "data"))
-#Sys.setenv(DEV_N_SPECIES = Sys.getenv("DEV_N_SPECIES", "100")) #limit to a smaller number for testing
+#Sys.setenv(DEV_N_SPECIES = Sys.getenv("DEV_N_SPECIES", "10")) #limit to a smaller number for testing
 Sys.setenv(DEV_N_SPECIES = Sys.getenv("DEV_N_SPECIES", ""))
 
 message(sprintf("DATA_DIR  = %s", Sys.getenv("DATA_DIR")))
@@ -87,6 +92,16 @@ if (publish_existing) {
 
   exit_code <- system("quarto render .")
   if (exit_code != 0) stop("quarto render failed (exit code ", exit_code, ")")
+}
+
+if (local_preview) {
+  message("\n=== Local preview ===")
+  message("Skipped S3 sync and the gh-pages push.")
+  message("Serve the rendered site with:")
+  message("  python3 -m http.server 8765 --bind 127.0.0.1 --directory _site")
+  message("Then open http://127.0.0.1:8765/")
+  message("Figures still load from CloudFront. This build does not upload new ones.")
+  quit(save = "no", status = 0)
 }
 
 # Figures are served from CloudFront. Sync them to S3 and keep them out of

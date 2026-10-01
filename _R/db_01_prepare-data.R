@@ -478,10 +478,13 @@ cat(sprintf("[prepare-data] Polar PNGs written to: %s (%d new)\n",
 # =============================================================================
 # 9.  Build per-species range map JSON files
 #
-# For each species: cells exposed in the most recent year, with count of
-# distinct variables exposed per cell.  Format: [[cellIdx, nVars], ...].
-# OJS fetches this and renders a reactive Leaflet map; coordinates are computed
-# from cellIdx using the raster geometry already passed to OJS.
+# Format: [[cellIdx, mask], ...]. Bit i of mask is set when that cell was
+# exposed to MAP_VAR_ORDER[i + 1]. Mask 0 is a range cell with no recorded
+# exposure; the map draws those in a neutral colour.
+#
+# Cell ids for the full range come from
+# data/share_exposed_2025_ranges/ranges_all_species.csv when that file is
+# present. Exposure bits come from AllCellExposureSpXVar (any year).
 # =============================================================================
 
 cat("[prepare-data] Building species range map JSON files...\n")
@@ -489,26 +492,81 @@ cat("[prepare-data] Building species range map JSON files...\n")
 map_dir <- file.path(cache_dir, "species_maps")
 dir.create(map_dir, showWarnings = FALSE, recursive = TRUE)
 
+# Same order and colours as the hotspot legend in index.qmd (VAR_COLORS).
+MAP_VAR_ORDER <- c(
+  "temp__3__max_up",
+  "temp__12_up",
+  "temp__12_lo",
+  "temp__3__min_lo",
+  "precip__3__max_up",
+  "precip__12_up",
+  "precip__12_lo",
+  "precip__3__min_lo"
+)
+MAP_VAR_COLORS <- c(
+  temp__3__max_up   = "#d73027",
+  temp__12_up       = "#fc8d59",
+  temp__3__min_lo   = "#bdbdbd",
+  temp__12_lo       = "#737373",
+  precip__3__max_up = "#4575b4",
+  precip__12_up     = "#74add1",
+  precip__3__min_lo = "#fee090",
+  precip__12_lo     = "#fdbb63"
+)
+MAP_VAR_LABELS <- c(
+  temp__3__max_up   = "High temperature (warmest 3 months)",
+  temp__12_up       = "High temperature (annual mean)",
+  temp__3__min_lo   = "Low temperature (coldest 3 months)",
+  temp__12_lo       = "Low temperature (annual mean)",
+  precip__3__max_up = "High precipitation (wettest 3 months)",
+  precip__12_up     = "High precipitation (annual total)",
+  precip__3__min_lo = "Low precipitation (driest 3 months)",
+  precip__12_lo     = "Low precipitation (annual total)"
+)
+jsonlite::write_json(
+  lapply(MAP_VAR_ORDER, function(code) {
+    list(code = code, color = unname(MAP_VAR_COLORS[[code]]), label = unname(MAP_VAR_LABELS[[code]]))
+  }),
+  file.path(map_dir, "var_bits.json"),
+  auto_unbox = TRUE
+)
+
+range_csv <- file.path(data_dir, "share_exposed_2025_ranges", "ranges_all_species.csv")
+range_by_sp <- NULL
+if (file.exists(range_csv)) {
+  range_df <- utils::read.csv(range_csv, stringsAsFactors = FALSE)
+  range_by_sp <- split(as.integer(range_df$cell_id), range_df$species)
+  rm(range_df)
+  cat(sprintf(
+    "[prepare-data] Full ranges loaded for %d species from %s\n",
+    length(range_by_sp), range_csv
+  ))
+}
+
+exposure_masks <- lapply(allcell_list, function(sp_allcell) {
+  if (is.null(sp_allcell) || !nrow(sp_allcell)) return(integer())
+  bits <- match(as.character(sp_allcell$var), MAP_VAR_ORDER) - 1L
+  ok <- !is.na(bits)
+  if (!any(ok)) return(integer())
+  tapply(2^bits[ok], sp_allcell$cell[ok], function(x) sum(unique(x)))
+})
+
 n_map_written <- 0L
 for (sp in all_species) {
-  out_path <- file.path(map_dir, paste0(sp, "_map.json"))
-  if (!file.exists(out_path)) {
-    sp_allcell <- allcell_list[[sp]]
-    if (!is.null(sp_allcell) && nrow(sp_allcell) > 0) {
-      recent_yr  <- max(sp_allcell$year)
-      cell_vars  <- sp_allcell |>
-        dplyr::filter(year == recent_yr) |>
-        dplyr::group_by(cell) |>
-        dplyr::summarise(n_vars = dplyr::n_distinct(var), .groups = "drop")
-      # Array of [cellIdx, nVars] pairs
-      jsonlite::write_json(
-        lapply(seq_len(nrow(cell_vars)), function(i)
-          list(as.integer(cell_vars$cell[i]), as.integer(cell_vars$n_vars[i]))),
-        out_path, auto_unbox = TRUE
-      )
-      n_map_written <- n_map_written + 1L
-    }
-  }
+  masks <- exposure_masks[[sp]]
+  if (is.null(masks)) masks <- integer()
+  range_cells <- range_by_sp[[sp]]
+  if (is.null(range_cells)) range_cells <- as.integer(names(masks))
+  if (!length(range_cells) && !length(masks)) next
+  cells <- unique(c(range_cells, as.integer(names(masks))))
+  cell_mask <- as.integer(masks[as.character(cells)])
+  cell_mask[is.na(cell_mask)] <- 0L
+  jsonlite::write_json(
+    lapply(seq_along(cells), function(i) list(as.integer(cells[i]), cell_mask[i])),
+    file.path(map_dir, paste0(sp, "_map.json")),
+    auto_unbox = TRUE
+  )
+  n_map_written <- n_map_written + 1L
 }
 cat(sprintf("[prepare-data] Range map JSONs written: %d (to %s)\n",
             n_map_written, map_dir))

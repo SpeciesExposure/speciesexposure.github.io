@@ -385,26 +385,26 @@ tpl <- terra::rast("data/landTemplate.tif")
 
 # Human-readable labels for climate variable codes
 VAR_LABELS <- c(
-  temp__12_up       = "Temperature: annual upper extreme",
-  temp__12_lo       = "Temperature: annual lower extreme",
-  temp__3__max_up   = "Temperature: seasonal max upper extreme",
-  temp__3__min_lo   = "Temperature: seasonal min lower extreme",
-  precip__12_up     = "Precipitation: annual upper extreme",
-  precip__12_lo     = "Precipitation: annual lower extreme",
-  precip__3__max_up = "Precipitation: seasonal max upper extreme",
-  precip__3__min_lo = "Precipitation: seasonal min lower extreme"
+  temp__3__max_up   = "High temperature (warmest 3 months)",
+  temp__12_up       = "High temperature (annual mean)",
+  temp__3__min_lo   = "Low temperature (coldest 3 months)",
+  temp__12_lo       = "Low temperature (annual mean)",
+  precip__3__max_up = "High precipitation (wettest 3 months)",
+  precip__12_up     = "High precipitation (annual total)",
+  precip__3__min_lo = "Low precipitation (driest 3 months)",
+  precip__12_lo     = "Low precipitation (annual total)"
 )
 
 # Colours for each climate variable (for map overlays and legends)
 VAR_COLORS <- c(
-  temp__12_up       = "#d73027",
-  temp__12_lo       = "#4575b4",
-  temp__3__max_up   = "#f46d43",
-  temp__3__min_lo   = "#313695",
-  precip__12_up     = "#1a9850",
-  precip__12_lo     = "#9400D3",
-  precip__3__max_up = "#33a02c",
-  precip__3__min_lo = "#6a0dad"
+  temp__3__max_up   = "#d73027",
+  temp__12_up       = "#fc8d59",
+  temp__3__min_lo   = "#bdbdbd",
+  temp__12_lo       = "#737373",
+  precip__3__max_up = "#4575b4",
+  precip__12_up     = "#74add1",
+  precip__3__min_lo = "#fee090",
+  precip__12_lo     = "#fdbb63"
 )
 
 # Helper: translate a variable code to its display label
@@ -1281,28 +1281,68 @@ species_range_map = {
   const renderer = L.canvas({ padding: 0.5 });
   const bounds = [];
 
-  // Colour: 1 variable = blue, 8 variables = red
-  const varColor = (v) => {
-    const t = Math.min((v - 1) / 7, 1);
-    const r = Math.round(t * 215 + (1 - t) * 49);
-    const g = Math.round((1 - t) * 115);
-    const b = Math.round((1 - t) * 178 + t * 39);
-    return `rgb(${r},${g},${b})`;
-  };
+  // Bit i matches data/species_maps/var_bits.json (hotspot VAR_COLORS).
+  // A mask of 0 is range with no recorded exposure.
+  let varBits = [];
+  try {
+    const bitResp = await fetch("data/species_maps/var_bits.json");
+    if (bitResp.ok) varBits = await bitResp.json();
+  } catch (e) {
+    varBits = [];
+  }
+  const RANGE_FILL = "#e8e8e8";
 
-  for (const [c, v] of mapData) {
+  const usedBits = new Set();
+  for (const [, mask] of mapData) {
+    varBits.forEach((_, i) => {
+      if (mask & (1 << i)) usedBits.add(i);
+    });
+  }
+
+  for (const [c, mask] of mapData) {
     const col = (c - 1) % rast_ncols + 1;
     const row = Math.floor((c - 1) / rast_ncols) + 1;
     const lon = rast_xmin + (col - 0.5) * rast_xres;
     const lat = rast_ymax - (row - 0.5) * rast_yres;
     const half_x = rast_xres / 2;
     const half_y = rast_yres / 2;
-    L.rectangle(
-      [[lat - half_y, lon - half_x], [lat + half_y, lon + half_x]],
-      { fillColor: varColor(v), color: "none", weight: 0, fillOpacity: 0.75, renderer }
-    ).addTo(map);
+    const south = lat - half_y;
+    const north = lat + half_y;
+    const west = lon - half_x;
+    const east = lon + half_x;
+    const exposed = varBits.filter((_, i) => mask & (1 << i));
+    if (!exposed.length) {
+      L.rectangle(
+        [[south, west], [north, east]],
+        { fillColor: RANGE_FILL, color: "none", weight: 0, fillOpacity: 0.4, renderer }
+      ).addTo(map);
+    } else {
+      // One hotspot colour per variable. Several variables split the cell
+      // into horizontal bands instead of blending into a new colour.
+      const band = (north - south) / exposed.length;
+      exposed.forEach((bit, i) => {
+        const top = north - i * band;
+        L.rectangle(
+          [[top - band, west], [top, east]],
+          { fillColor: bit.color, color: "none", weight: 0, fillOpacity: 0.55, renderer }
+        ).addTo(map);
+      });
+    }
     bounds.push([lat, lon]);
   }
+
+  const legend = L.control({ position: "bottomleft" });
+  legend.onAdd = () => {
+    const div = L.DomUtil.create("div", "species-range-legend");
+    div.style.cssText = "background:rgba(255,255,255,0.94);padding:6px 8px;border-radius:4px;font:11px/1.35 sans-serif;color:#222;max-width:210px;";
+    const row = (color, label) =>
+      `<div style="display:flex;gap:6px;align-items:flex-start;margin:2px 0;"><span style="flex:0 0 12px;height:12px;margin-top:2px;background:${color};border:1px solid rgba(0,0,0,0.15);"></span><span>${label}</span></div>`;
+    div.innerHTML = row(RANGE_FILL, "Range, no recorded exposure") +
+      varBits.filter((_, i) => usedBits.has(i)).map(bit => row(bit.color, bit.label)).join("");
+    L.DomEvent.disableClickPropagation(div);
+    return div;
+  };
+  legend.addTo(map);
 
   if (bounds.length)
     map.fitBounds(L.latLngBounds(bounds), { padding: [10, 10], maxZoom: 5 });
